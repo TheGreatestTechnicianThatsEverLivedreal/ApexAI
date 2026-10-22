@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.2.0",
+  "name": "Spa-Francorchamps",
+  "length_m": 7004.0,
+  "cell_size_m": 0.25,
+  "origin": [0.0, 0.0],
+  "bbox": [-1500.0, -1200.0, 1800.0, 1400.0],
+  "start_finish": {"x": 380.0, "y": 310.0, "heading": 1.57},
+  "sectors": [
+    {"index": 1, "name": "Sector 1 (La Source to Kemmel)", "distance_m": 2210.0, "colour": "#FF4458"},
+    {"index": 2, "name": "Sector 2 (Les Combes to Stavelot)", "distance_m": 5120.0, "colour": "#19B8C9"},
+    {"index": 3, "name": "Sector 3 (Blanchimont to Bus Stop)", "distance_m": 7004.0, "colour": "#FFC247"}
+  ],
+  "drs_zones": [
+    {"index": 1, "detection_m": 1500.0, "activation_m": 1650.0, "end_m": 2350.0, "colour": "#3DFF8F"},
+    {"index": 2, "detection_m": 6600.0, "activation_m": 6750.0, "end_m": 7000.0, "colour": "#3DFF8F"}
+  ],
+  "speed_trap": {"distance_m": 2180.0, "x": 620.0, "y": 180.0, "colour": "#F0388F"},
+  "surface_legend": [
+    {"id": 0, "name": "Outside / Void", "colour": "#07090F", "grip_mu": 0.0, "solid": false},
+    {"id": 1, "name": "Tarmac Track", "colour": "#2B3346", "grip_mu": 1.0, "solid": false},
+    {"id": 2, "name": "Pit Lane", "colour": "#1F283C", "grip_mu": 0.95, "solid": false},
+    {"id": 3, "name": "Kerb Flat", "colour": "#D7DEEC", "grip_mu": 0.88, "solid": false},
+    {"id": 4, "name": "Kerb Rumble", "colour": "#FF4458", "grip_mu": 0.72, "solid": false},
+    {"id": 5, "name": "Runoff Tarmac", "colour": "#193549", "grip_mu": 0.85, "solid": false},
+    {"id": 6, "name": "Gravel Trap", "colour": "#8B6538", "grip_mu": 0.35, "solid": false},
+    {"id": 7, "name": "Grass", "colour": "#1C3B2B", "grip_mu": 0.45, "solid": false},
+    {"id": 8, "name": "Sand Trap", "colour": "#B89B5F", "grip_mu": 0.28, "solid": false},
+    {"id": 9, "name": "Barrier Wall", "colour": "#5A657A", "grip_mu": 0.0, "solid": true},
+    {"id": 10, "name": "Barrier Tyres", "colour": "#151922", "grip_mu": 0.0, "solid": true},
+    {"id": 11, "name": "Armco Barrier", "colour": "#9AA5B8", "grip_mu": 0.0, "solid": true},
+    {"id": 12, "name": "Water / Wet Puddle", "colour": "#15305B", "grip_mu": 0.32, "solid": false}
+  ],
+  "mini_segments_count": 25,
+  "centreline_sample_points": 210
+}

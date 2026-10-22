@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Runtime constraint: HMR is disabled in AI Studio; ignore Vite client WebSocket errors
+      window.addEventListener('error', function(event) {
+        var msg = event.message || '';
+        if (msg.includes('WebSocket') || msg.includes('@vite/client') || msg.includes('createWebSocketModuleRunnerTransport')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason;
+        var text = reason ? (reason.message || String(reason) || '') : '';
+        var stack = reason ? (reason.stack || '') : '';
+        if (text.includes('WebSocket') || text.includes('@vite/client') || stack.includes('@vite/client') || stack.includes('createWebSocketModuleRunnerTransport')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }, true);
+    </script>
+    <title>ApexAI - F1 Driver Sim Orchestrator & Control Deck</title>
+    <meta name="description" content="High-performance desktop control UI and supervisor for training, tuning, and telemetry orchestration of AI race-car drivers." />
+    <meta property="og:title" content="ApexAI - F1 Driver Sim Orchestrator & Control Deck" />
+    <meta property="og:description" content="High-performance desktop control UI and supervisor for training, tuning, and telemetry orchestration of AI race-car drivers." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

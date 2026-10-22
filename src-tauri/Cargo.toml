@@ -1,0 +1,20 @@
+[package]
+name = "apexai-core"
+version = "1.0.0"
+description = "ApexAI F1 Sim Core Supervisor, WebSocket Hub, Resource Governor, and Watchdog"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = ["fs-all", "path-all", "process-all", "window-all", "global-shortcut"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+sysinfo = "0.29"
+ctrlc = "3.4"
+sha2 = "0.10"
+hex = "0.4"

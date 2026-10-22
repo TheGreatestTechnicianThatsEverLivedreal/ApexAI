@@ -1,0 +1,28 @@
+{
+  "name": "apex_v4_quali_beast",
+  "trained_laps": 6200,
+  "description": "Aggressive low-fuel single-lap qualifying specialist policy",
+  "per_track": {
+    "Silverstone GP": {
+      "best_window_avg_s": 83.750,
+      "avg_lap_s": 84.180,
+      "track_training_done": true,
+      "last_target_s": 83.500,
+      "last_best_s": 83.410
+    },
+    "Spa-Francorchamps": {
+      "best_window_avg_s": 102.850,
+      "avg_lap_s": 103.450,
+      "track_training_done": true,
+      "last_target_s": 102.600,
+      "last_best_s": 102.480
+    },
+    "Monza Circuit": {
+      "best_window_avg_s": 78.410,
+      "avg_lap_s": 78.920,
+      "track_training_done": true,
+      "last_target_s": 78.200,
+      "last_best_s": 78.150
+    }
+  }
+}

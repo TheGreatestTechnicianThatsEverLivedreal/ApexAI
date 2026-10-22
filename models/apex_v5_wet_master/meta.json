@@ -1,0 +1,28 @@
+{
+  "name": "apex_v5_wet_master",
+  "trained_laps": 5100,
+  "description": "Rain and standing-water traction control with conservative brake bias",
+  "per_track": {
+    "Silverstone GP": {
+      "best_window_avg_s": 84.850,
+      "avg_lap_s": 85.340,
+      "track_training_done": true,
+      "last_target_s": 84.600,
+      "last_best_s": 84.450
+    },
+    "Spa-Francorchamps": {
+      "best_window_avg_s": 103.950,
+      "avg_lap_s": 104.550,
+      "track_training_done": true,
+      "last_target_s": 103.800,
+      "last_best_s": 103.700
+    },
+    "Monza Circuit": {
+      "best_window_avg_s": 79.450,
+      "avg_lap_s": 80.050,
+      "track_training_done": true,
+      "last_target_s": 79.300,
+      "last_best_s": 79.180
+    }
+  }
+}

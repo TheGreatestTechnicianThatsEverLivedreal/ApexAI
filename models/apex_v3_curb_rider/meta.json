@@ -1,0 +1,28 @@
+{
+  "name": "apex_v3_curb_rider",
+  "trained_laps": 4820,
+  "description": "High-suspension compliance curb mounting policy for tight chicanes",
+  "per_track": {
+    "Silverstone GP": {
+      "best_window_avg_s": 84.420,
+      "avg_lap_s": 84.950,
+      "track_training_done": true,
+      "last_target_s": 84.200,
+      "last_best_s": 84.050
+    },
+    "Spa-Francorchamps": {
+      "best_window_avg_s": 103.710,
+      "avg_lap_s": 104.300,
+      "track_training_done": true,
+      "last_target_s": 103.500,
+      "last_best_s": 103.420
+    },
+    "Monza Circuit": {
+      "best_window_avg_s": 79.150,
+      "avg_lap_s": 79.620,
+      "track_training_done": true,
+      "last_target_s": 79.000,
+      "last_best_s": 78.880
+    }
+  }
+}

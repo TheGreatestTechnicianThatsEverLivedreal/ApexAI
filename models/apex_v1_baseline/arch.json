@@ -1,0 +1,26 @@
+{
+  "name": "apex_v1_baseline",
+  "created_at": "2026-08-14T10:00:00Z",
+  "layers": [64, 128, 128, 16],
+  "input_toggles": {
+    "thermals": true,
+    "aero": true,
+    "tyres": true,
+    "ers": false,
+    "track_pos": true,
+    "driver_feel": false,
+    "mfd_data": false
+  },
+  "output_toggles": {
+    "steering": true,
+    "gearbox": true,
+    "ers_adv": false,
+    "pit_setup": false,
+    "differentials": true,
+    "fuel_mixes": false,
+    "clutch": false,
+    "drs_adv": true,
+    "box_lap": false,
+    "brake_bias": true
+  }
+}

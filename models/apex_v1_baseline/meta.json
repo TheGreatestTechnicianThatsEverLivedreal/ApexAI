@@ -1,0 +1,28 @@
+{
+  "name": "apex_v1_baseline",
+  "trained_laps": 1420,
+  "description": "Baseline deep policy network with foundational throttle/brake control",
+  "per_track": {
+    "Silverstone GP": {
+      "best_window_avg_s": 86.412,
+      "avg_lap_s": 87.230,
+      "track_training_done": true,
+      "last_target_s": 86.000,
+      "last_best_s": 85.890
+    },
+    "Spa-Francorchamps": {
+      "best_window_avg_s": 105.820,
+      "avg_lap_s": 106.910,
+      "track_training_done": true,
+      "last_target_s": 105.000,
+      "last_best_s": 105.440
+    },
+    "Monza Circuit": {
+      "best_window_avg_s": 81.350,
+      "avg_lap_s": 82.110,
+      "track_training_done": false,
+      "last_target_s": 81.000,
+      "last_best_s": 81.120
+    }
+  }
+}

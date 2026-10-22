@@ -1,0 +1,28 @@
+{
+  "name": "apex_v2_aerodynamic",
+  "trained_laps": 3150,
+  "description": "Aero slipstream and dynamic DRS anticipation tuning network",
+  "per_track": {
+    "Silverstone GP": {
+      "best_window_avg_s": 85.110,
+      "avg_lap_s": 85.840,
+      "track_training_done": true,
+      "last_target_s": 85.000,
+      "last_best_s": 84.720
+    },
+    "Spa-Francorchamps": {
+      "best_window_avg_s": 104.290,
+      "avg_lap_s": 104.980,
+      "track_training_done": true,
+      "last_target_s": 104.000,
+      "last_best_s": 104.010
+    },
+    "Monza Circuit": {
+      "best_window_avg_s": 79.920,
+      "avg_lap_s": 80.450,
+      "track_training_done": true,
+      "last_target_s": 79.800,
+      "last_best_s": 79.650
+    }
+  }
+}

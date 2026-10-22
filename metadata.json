@@ -1,0 +1,6 @@
+{
+  "name": "ApexAI - F1 Driver Sim Orchestrator & Control Deck",
+  "description": "High-performance desktop control UI and supervisor for training, tuning, and telemetry orchestration of AI race-car drivers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
