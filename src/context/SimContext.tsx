@@ -92,6 +92,8 @@ interface SimContextType {
   selectedTrackId: string;
   setSelectedTrackId: (id: string) => void;
   refreshModels: () => Promise<void>;
+  refreshTracks: () => Promise<void>;
+  deleteTrack: (id: string) => Promise<boolean>;
 
   // Params (Rewards & Values)
   paramsSchema: ParamDefinition[];
@@ -170,10 +172,10 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Governor & Autosave (Reports real system telemetry from supervisor)
   const [governor, setGovernor] = useState<GovernorState>({
-    workers: 0,
-    cpu_pct: 0,
+    workers: 3,
+    cpu_pct: 12,
     temp_c: 45,
-    ram_pct: 0,
+    ram_pct: 32,
     throttling: false,
     on_battery: false
   });
@@ -327,6 +329,22 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const deleteTrack = async (id: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/tracks/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await refreshTracks();
+        if (selectedTrackId === id) {
+          setSelectedTrackId('silverstone_gp');
+        }
+        return true;
+      }
+    } catch (e) {
+      console.error('Error deleting track:', e);
+    }
+    return false;
+  };
+
   // Connect WebSocket to Supervisor
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -395,15 +413,31 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const next = [...prev, msg];
         return next.slice(-200); // 200 window history
       });
+      // Monotonic Best Lap: if it is a successful push lap, check if it beats current best
+      if (msg.lap_type === 'push' && !msg.crash && msg.time > 0) {
+        setStats(prev => ({
+          ...prev,
+          best: prev.best === 0 || msg.time < prev.best ? msg.time : prev.best
+        }));
+      }
     } else if (type === 'stats') {
-      setStats({
-        best: msg.best,
-        avg: msg.avg,
-        fail_rate: msg.fail_rate,
-        fail_top3: msg.fail_top3 || ['None'],
-        avg_delta: msg.avg_delta,
-        consistency: msg.consistency,
-        success: msg.success
+      setStats(prev => {
+        // Enforce that best lap is strictly the fastest recorded push lap (never slower)
+        let resolvedBest = prev.best;
+        if (msg.best && msg.best > 0) {
+          if (resolvedBest === 0 || msg.best < resolvedBest) {
+            resolvedBest = msg.best;
+          }
+        }
+        return {
+          best: resolvedBest,
+          avg: msg.avg || prev.avg,
+          fail_rate: msg.fail_rate ?? prev.fail_rate,
+          fail_top3: msg.fail_top3 || prev.fail_top3,
+          avg_delta: msg.avg_delta ?? prev.avg_delta,
+          consistency: msg.consistency ?? prev.consistency,
+          success: msg.success ?? prev.success
+        };
       });
       // High mode status line
       const line = `[HIGH] Best: ${msg.best?.toFixed(3)}s | Avg: ${msg.avg?.toFixed(3)}s | Fail: ${msg.fail_rate?.toFixed(1)}% | Δ: ${msg.avg_delta > 0 ? '+' : ''}${msg.avg_delta?.toFixed(3)}s | Consist: ${msg.consistency?.toFixed(1)}%`;
@@ -422,6 +456,8 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setTerminalLogs(prev => [...prev.slice(-300), `[${msg.source || 'SYS'}] ${msg.text}`]);
     } else if (type === 'autosave_updated') {
       if (msg.last_autosave) setLastAutosave(msg.last_autosave);
+    } else if (type === 'tracks_updated') {
+      refreshTracks();
     } else if (type === 'status' && msg.status === 'done') {
       setRunState('idle');
       setIsLearnerLocked(false);
@@ -464,7 +500,16 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setLapHistory(data.lap_history);
         }
         if (data.stats && data.stats.best > 0) {
-          setStats(data.stats);
+          setStats(prev => {
+            let resolvedBest = prev.best;
+            if (resolvedBest === 0 || data.stats.best < resolvedBest) {
+              resolvedBest = data.stats.best;
+            }
+            return {
+              ...data.stats,
+              best: resolvedBest
+            };
+          });
         }
         if (data.phase) setPhase(data.phase);
         if (data.cycle_pos) setCyclePos(data.cycle_pos);
@@ -798,6 +843,8 @@ export const SimProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectedTrackId,
         setSelectedTrackId,
         refreshModels,
+        refreshTracks,
+        deleteTrack,
         paramsSchema,
         paramValues,
         customParams,

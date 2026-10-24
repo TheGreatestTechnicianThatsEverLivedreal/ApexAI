@@ -12,11 +12,13 @@ import {
   Zap,
   CheckCircle2,
   AlertTriangle,
+  AlertCircle,
   RotateCcw,
   Terminal,
   Activity,
   Layers,
-  Cpu
+  Cpu,
+  Copy
 } from 'lucide-react';
 
 export const LearnerScreen: React.FC = () => {
@@ -41,6 +43,7 @@ export const LearnerScreen: React.FC = () => {
   const [commandStr, setCommandStr] = useState<string>('python3 learner.py');
   const [interpreterPath, setInterpreterPath] = useState<string>('/usr/bin/python3');
   const [launchInTerminal, setLaunchInTerminal] = useState<boolean>(true);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   // Build & Benchmark state
   const [benchmarkStatus, setBenchmarkStatus] = useState<string>('idle');
@@ -48,6 +51,9 @@ export const LearnerScreen: React.FC = () => {
 
   // Test connection state
   const [testConnStatus, setTestConnStatus] = useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
+  const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
+  const [newFileName, setNewFileName] = useState<string>('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Load active file content
   useEffect(() => {
@@ -87,11 +93,15 @@ export const LearnerScreen: React.FC = () => {
       });
       if (res.ok) {
         setIsSaved(true);
+        setErrorMessage(null);
       } else {
-        alert('Cannot save: Learner Lock is active during training.');
+        setErrorMessage('Cannot save: Learner Lock is active during training.');
+        setTimeout(() => setErrorMessage(null), 4000);
       }
     } catch (e) {
       console.error(e);
+      setErrorMessage('Failed to write file to disk.');
+      setTimeout(() => setErrorMessage(null), 4000);
     }
   };
 
@@ -137,7 +147,7 @@ export const LearnerScreen: React.FC = () => {
   const requiredMessageTypes = ['hello', 'frame', 'lap_complete', 'stats', 'phase', 'metrics', 'status', 'log'];
 
   return (
-    <div className="flex-1 h-screen flex flex-col p-4 bg-[#07090F] overflow-hidden select-none font-mono">
+    <div className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex flex-col p-4 bg-[#07090F] select-none font-mono">
       {/* Top Header & Learner Lock Banner */}
       <div className="flex items-center justify-between pb-3 border-b-2 border-[#1E2740]">
         <div className="flex items-center gap-3">
@@ -180,12 +190,8 @@ export const LearnerScreen: React.FC = () => {
               <button
                 disabled={isLearnerLocked}
                 onClick={() => {
-                  const name = prompt('New Python file name (e.g. policy.py):');
-                  if (name && !files.find((f) => f.name === name)) {
-                    setFiles([...files, { name, size: 0 }]);
-                    setActiveFile(name);
-                    setEditorContent('# ' + name + '\n');
-                  }
+                  setNewFileName('');
+                  setShowNewFileModal(true);
                 }}
                 className="p-1 rounded bg-[#121826] hover:bg-[#1E2740] text-[#19B8C9] disabled:opacity-30 cursor-pointer"
                 title="Create New File"
@@ -417,17 +423,118 @@ export const LearnerScreen: React.FC = () => {
             </div>
           </div>
 
-          {/* Process Output Log Tail */}
+          {/* Process Output Log Tail with Copy Support */}
           <div className="pt-2 border-t border-[#1E2740]">
-            <div className="text-[10px] text-[#7C88A6] uppercase mb-1">Process Log Tail:</div>
-            <div className="h-20 bg-[#07090F] border border-[#1E2740] rounded-lg p-2 overflow-y-auto text-[9px] text-[#7C88A6] space-y-0.5">
-              {terminalLogs.slice(-6).map((log, i) => (
-                <div key={i} className="truncate">{log}</div>
+            <div className="flex items-center justify-between text-[10px] text-[#7C88A6] uppercase mb-1">
+              <span>Process Log Tail:</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    const tail = terminalLogs.slice(-20).join('\n');
+                    navigator.clipboard.writeText(tail);
+                    setCopyNotice('Copied last 20 log lines!');
+                    setTimeout(() => setCopyNotice(null), 2500);
+                  }}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-[#121826] border border-[#1E2740] hover:border-[#19B8C9] text-[9px] text-[#19B8C9] cursor-pointer"
+                  title="Copy last 20 log lines"
+                >
+                  <Copy className="w-2.5 h-2.5" />
+                  <span>Copy Tail</span>
+                </button>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(terminalLogs.join('\n'));
+                    setCopyNotice('Copied full log!');
+                    setTimeout(() => setCopyNotice(null), 2500);
+                  }}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-[#121826] border border-[#1E2740] hover:border-[#19B8C9] text-[9px] text-[#D7DEEC] cursor-pointer"
+                  title="Copy full log"
+                >
+                  <Copy className="w-2.5 h-2.5" />
+                  <span>Copy All</span>
+                </button>
+              </div>
+            </div>
+            <div className="h-24 bg-[#07090F] border border-[#1E2740] rounded-lg p-2 overflow-y-auto text-[9px] text-[#D7DEEC] space-y-0.5 select-text font-mono">
+              {terminalLogs.slice(-25).map((log, i) => (
+                <div key={i} className="hover:bg-[#121826]/40 rounded px-1 select-text">
+                  {log}
+                </div>
               ))}
             </div>
           </div>
         </div>
       </div>
+
+      {/* In-UI Notification Banner */}
+      {errorMessage && (
+        <div className="fixed bottom-4 right-4 z-50 px-4 py-2.5 rounded-xl bg-[#FF4458]/20 border border-[#FF4458] text-[#FF4458] text-xs font-bold shadow-2xl flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" />
+          <span>{errorMessage}</span>
+          <button onClick={() => setErrorMessage(null)} className="ml-2 text-white hover:text-[#FF4458] cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {/* Custom UI Modal for New Python File */}
+      {showNewFileModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-[420px] bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px] p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#1E2740] pb-2">
+              <span className="font-bold text-sm text-[#D7DEEC] uppercase">Create New Python Script</span>
+              <button onClick={() => setShowNewFileModal(false)} className="text-[#7C88A6] hover:text-white cursor-pointer">
+                ✕
+              </button>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-[#7C88A6] uppercase">Script Filename (in learner/):</label>
+              <input
+                type="text"
+                autoFocus
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                placeholder="e.g. policy_v2.py"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newFileName.trim()) {
+                    const rawName = newFileName.trim();
+                    const cleanName = rawName.endsWith('.py') ? rawName : `${rawName}.py`;
+                    if (!files.find((f) => f.name === cleanName)) {
+                      setFiles([...files, { name: cleanName, size: 0 }]);
+                      setActiveFile(cleanName);
+                      setEditorContent(`# ${cleanName}\nfrom f1ui_bridge import bridge\nimport time\n\n# YOUR POLICY LOGIC HERE\n`);
+                    }
+                    setShowNewFileModal(false);
+                  }
+                }}
+                className="w-full bg-[#07090F] border border-[#1E2740] rounded-xl px-3 py-2 text-xs text-[#D7DEEC] focus:border-[#19B8C9] outline-none"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowNewFileModal(false)}
+                className="flex-1 py-2 bg-[#121826] border border-[#1E2740] text-[#7C88A6] hover:text-[#D7DEEC] text-xs font-bold rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!newFileName.trim()) return;
+                  const rawName = newFileName.trim();
+                  const cleanName = rawName.endsWith('.py') ? rawName : `${rawName}.py`;
+                  if (!files.find((f) => f.name === cleanName)) {
+                    setFiles([...files, { name: cleanName, size: 0 }]);
+                    setActiveFile(cleanName);
+                    setEditorContent(`# ${cleanName}\nfrom f1ui_bridge import bridge\nimport time\n\n# YOUR POLICY LOGIC HERE\n`);
+                  }
+                  setShowNewFileModal(false);
+                }}
+                className="flex-1 py-2 bg-[#19B8C9] text-black text-xs font-bold rounded-xl hover:bg-[#19B8C9]/90 cursor-pointer shadow-[0_0_10px_rgba(25,184,201,0.3)]"
+              >
+                Create Script
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

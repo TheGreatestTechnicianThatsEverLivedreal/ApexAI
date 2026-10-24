@@ -61,22 +61,47 @@ ApexAI implements a multi-process architecture with strict process isolation:
 
 ---
 
-## Running the Unit Tests
+## Running in VS Code
 
-The test suite tests parameter safety validators, safe expression evaluation without `eval()`, break-even probabilities, rolling autosave triggers, NaN weight rejection, and benchmark equivalence:
+### 1. Prerequisites
+- **Node.js**: v18.0.0+ or v20.0.0+ installed on your system.
+- **Python**: 3.8+ (optional, only required if you run the standalone Python learner agent).
 
-```bash
-npm test
-```
+### 2. Steps to Execute in VS Code
 
-Or execute directly with tsx:
+#### Quick Method (One-Click with VS Code Run & Debug):
+1. Open this repository in VS Code:
+   ```bash
+   code .
+   ```
+2. Press **`F5`** (or go to the **Run and Debug** tab (`Ctrl+Shift+D`) and click **"ApexAI: Start Dev Server (Full Stack)"**).
+3. Open your browser at **`http://localhost:3000`**.
 
-```bash
-npx tsx tests/run_tests.ts
-```
+#### Terminal Method:
+1. Open the integrated terminal in VS Code:
+   ```bash
+   Ctrl + ` (backtick)
+   ```
+2. Install npm dependencies (first time only):
+   ```bash
+   npm install
+   ```
+3. Start the dev server:
+   ```bash
+   npm run dev
+   ```
+4. Open **`http://localhost:3000`** in your browser.
 
----
+#### Optional: Running the Python AI Learner Agent
+If you want to train or step the actual Python learner model alongside the UI:
+1. Open a new terminal tab (`Ctrl+Shift+\`` or click the `+` icon in the terminal panel).
+2. Install the lightweight Python bridge dependency:
+   ```bash
+   pip install websocket-client
+   ```
+3. Run the learner:
+   ```bash
+   python learner/learner.py
+   ```
+   *Note: If you don't have Python installed, you can simply toggle **"Demo Mode"** inside the UI to simulate live telemetry.*
 
-## Demo Mode
-
-To preview all screens and telemetry without a local Python machine learning runtime, toggle **Demo Mode** in the right rail navigation. This uses `demo/fake_learner.py` to emit realistic synthetic telemetry, lap completions, sector splits, and custom metrics.

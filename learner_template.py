@@ -9,6 +9,14 @@ import sys
 import time
 import json
 import math
+
+# Ensure parent and script directory are in sys.path so f1ui_bridge can always be imported
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PARENT_DIR = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
+for _p in [_CURRENT_DIR, _PARENT_DIR]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from f1ui_bridge import bridge
 
 def save_state(checkpoint_dir):

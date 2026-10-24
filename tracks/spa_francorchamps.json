@@ -32,5 +32,27 @@
     {"id": 12, "name": "Water / Wet Puddle", "colour": "#15305B", "grip_mu": 0.32, "solid": false}
   ],
   "mini_segments_count": 25,
-  "centreline_sample_points": 210
+  "centreline_sample_points": 210,
+  "centreline_points": [
+    { "x": 380, "y": 310, "label": "SF", "elevation_mode": "sf", "elevation_val": 0.0, "banking_deg": 0.0, "width_m": 15.0, "width_interp": "quadratic" },
+    { "x": 440, "y": 300, "label": "T1", "elevation_mode": "last", "elevation_val": -2.5, "banking_deg": -2.0, "width_m": 12.0, "width_interp": "quadratic" },
+    { "x": 500, "y": 340, "label": "T2", "elevation_mode": "last", "elevation_val": -3.0, "banking_deg": 3.0, "width_m": 13.0, "width_interp": "quadratic" },
+    { "x": 540, "y": 310, "label": "T3", "elevation_mode": "last", "elevation_val": 4.5, "banking_deg": 6.0, "width_m": 14.0, "width_interp": "linear" },
+    { "x": 580, "y": 230, "label": "T4", "elevation_mode": "last", "elevation_val": 8.0, "banking_deg": 7.5, "width_m": 15.0, "width_interp": "quadratic" },
+    { "x": 660, "y": 130, "label": "T5", "elevation_mode": "last", "elevation_val": 6.5, "banking_deg": 1.0, "width_m": 14.5, "width_interp": "linear" },
+    { "x": 640, "y": 70, "label": "T6", "elevation_mode": "last", "elevation_val": -1.0, "banking_deg": -2.0, "width_m": 11.5, "width_interp": "quadratic" },
+    { "x": 590, "y": 65, "label": "T7", "elevation_mode": "last", "elevation_val": -1.5, "banking_deg": 3.0, "width_m": 11.0, "width_interp": "quadratic" },
+    { "x": 540, "y": 80, "label": "T8", "elevation_mode": "last", "elevation_val": -2.0, "banking_deg": 2.5, "width_m": 12.0, "width_interp": "linear" },
+    { "x": 480, "y": 120, "label": "T9", "elevation_mode": "last", "elevation_val": -3.5, "banking_deg": 4.5, "width_m": 12.5, "width_interp": "quadratic" },
+    { "x": 440, "y": 170, "label": "T10", "elevation_mode": "last", "elevation_val": -2.0, "banking_deg": 2.0, "width_m": 13.0, "width_interp": "quadratic" },
+    { "x": 370, "y": 210, "label": "T11", "elevation_mode": "last", "elevation_val": -2.5, "banking_deg": 6.0, "width_m": 12.5, "width_interp": "quadratic" },
+    { "x": 320, "y": 260, "label": "T12", "elevation_mode": "last", "elevation_val": -1.5, "banking_deg": 4.0, "width_m": 13.5, "width_interp": "linear" },
+    { "x": 240, "y": 280, "label": "T13", "elevation_mode": "last", "elevation_val": 0.5, "banking_deg": 3.0, "width_m": 12.0, "width_interp": "quadratic" },
+    { "x": 170, "y": 310, "label": "T14", "elevation_mode": "last", "elevation_val": 1.0, "banking_deg": 3.5, "width_m": 12.0, "width_interp": "quadratic" },
+    { "x": 120, "y": 380, "label": "T15", "elevation_mode": "last", "elevation_val": 0.5, "banking_deg": 2.0, "width_m": 13.0, "width_interp": "linear" },
+    { "x": 180, "y": 440, "label": "T16", "elevation_mode": "last", "elevation_val": -0.5, "banking_deg": 1.0, "width_m": 14.0, "width_interp": "quadratic" },
+    { "x": 270, "y": 430, "label": "T17", "elevation_mode": "last", "elevation_val": -0.8, "banking_deg": 2.5, "width_m": 14.5, "width_interp": "quadratic" },
+    { "x": 330, "y": 360, "label": "T18", "elevation_mode": "last", "elevation_val": -1.0, "banking_deg": -1.0, "width_m": 11.0, "width_interp": "quadratic" },
+    { "x": 360, "y": 320, "label": "T19", "elevation_mode": "last", "elevation_val": -0.5, "banking_deg": 0.0, "width_m": 12.0, "width_interp": "linear" }
+  ]
 }

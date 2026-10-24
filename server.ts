@@ -106,7 +106,7 @@ function getRealGovernorState() {
   const totalCores = cpus.length || 4;
   const reserveCores = activeRunConfig?.values?.['governor.reserve_cores'] ?? 1;
   const isRunning = activeRunState === 'running';
-  const targetWorkers = isRunning ? Math.max(1, totalCores - reserveCores) : 0;
+  const allocatedWorkers = Math.max(1, totalCores - reserveCores);
 
   // Real RAM usage
   const totalMem = os.totalmem();
@@ -114,15 +114,17 @@ function getRealGovernorState() {
   const usedMem = totalMem - freeMem;
   const ramPct = Math.round((usedMem / totalMem) * 100);
 
-  // CPU usage: When idle, learner process is not active so CPU is 0%
+  // CPU usage: Real supervisor + system load
   const load = os.loadavg()[0];
-  const cpuPct = isRunning ? Math.max(18, Math.min(100, Math.round((load / totalCores) * 100))) : 0;
+  const cpuPct = isRunning 
+    ? Math.max(18, Math.min(100, Math.round((load / totalCores) * 100))) 
+    : Math.max(6, Math.min(100, Math.round((load / totalCores) * 100)));
 
   // Estimated temperature based on load
   const tempLimit = activeRunConfig?.values?.['governor.temp_limit_c'] ?? 85.0;
   const tempC = isRunning ? Math.round(52 + (cpuPct / 100) * 28) : 42;
   const throttling = tempC >= tempLimit;
-  const activeWorkers = throttling ? Math.max(1, targetWorkers - 1) : targetWorkers;
+  const activeWorkers = throttling ? Math.max(1, allocatedWorkers - 1) : allocatedWorkers;
 
   return {
     workers: activeWorkers,
@@ -417,10 +419,27 @@ app.get('/api/tracks', (req, res) => {
 
 app.post('/api/tracks/:id', (req, res) => {
   const { id } = req.params;
-  const trackData = req.body;
+  const trackData = req.body || {};
+  trackData.id = id;
   const filePath = path.join(TRACKS_DIR, `${id}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(trackData, null, 2));
+  fs.writeFileSync(filePath, JSON.stringify(trackData, null, 2), 'utf-8');
+  broadcast({ type: 'tracks_updated', trackId: id });
   res.json({ success: true, track: trackData });
+});
+
+app.delete('/api/tracks/:id', (req, res) => {
+  const { id } = req.params;
+  // Keep default tracks safe
+  if (id === 'silverstone_gp' || id === 'spa_francorchamps') {
+    return res.status(403).json({ error: 'Default circuits cannot be removed.' });
+  }
+  const filePath = path.join(TRACKS_DIR, `${id}.json`);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    broadcast({ type: 'tracks_updated', deletedId: id });
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: 'Track not found' });
 });
 
 // 5. Learner Files & Locking
@@ -535,6 +554,14 @@ app.post('/api/run/start', (req, res) => {
   activeRunState = 'running';
   currentSpeedMode = 'no';
   emittedMessageChecklist.clear();
+
+  // Ensure any previous running process is completely terminated
+  if (activeLearnerProcess) {
+    try {
+      activeLearnerProcess.kill('SIGKILL');
+    } catch (e) {}
+    activeLearnerProcess = null;
+  }
 
   // Determine script to run
   const scriptToRun = is_demo

@@ -11,8 +11,10 @@ import {
   HelpCircle
 } from 'lucide-react';
 
+import { DraggableHUDOverlay } from '../common/DraggableHUDOverlay.tsx';
+
 export const BuilderScreen: React.FC = () => {
-  const { navigateTo, models, refreshModels, paramValues } = useSim();
+  const { navigateTo, models, refreshModels, paramValues, carSetupValues } = useSim();
 
   const [modelName, setModelName] = useState<string>('apex_v6_custom');
   const [weightsFilePath, setWeightsFilePath] = useState<string>('models/apex_v1_baseline/weights.bin');
@@ -22,15 +24,15 @@ export const BuilderScreen: React.FC = () => {
   // Group size per toggle (from Values > IO groups)
   const defaultGroupSize = Number(paramValues['io.group_size_default'] ?? 1);
 
-  // Input Toggles (Gear and RPM are always on!)
+  // Input Toggles (Gear, RPM, Driver Feel, and MFD Data are locked ON)
   const [inputToggles, setInputToggles] = useState<Record<string, boolean>>({
     thermals: true,
     aero: true,
     tyres: true,
     ers: true,
     track_position: true,
-    driver_feel: false,
-    mfd_data: false
+    driver_feel: true,
+    mfd_data: true
   });
 
   // Output Toggles (whether AI can adjust that system)
@@ -112,7 +114,7 @@ export const BuilderScreen: React.FC = () => {
   const allLayers = [effectiveInputNeurons, ...hiddenLayers, effectiveOutputNeurons];
 
   return (
-    <div className="flex-1 h-screen flex flex-col p-4 bg-[#07090F] overflow-hidden select-none font-mono">
+    <div className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex flex-col p-4 bg-[#07090F] select-none font-mono">
       {/* Top Header with Back button and Save */}
       <div className="flex items-center justify-between pb-3 border-b-2 border-[#1E2740]">
         <div className="flex items-center gap-3">
@@ -160,26 +162,36 @@ export const BuilderScreen: React.FC = () => {
             {/* Always-on Inputs */}
             <div className="py-2 space-y-1">
               <div className="text-[10px] uppercase font-bold text-[#7C88A6]">Fixed Sensory Telemetry</div>
-              <div className="p-2 rounded bg-[#121826] border border-[#1E2740] text-xs text-[#3DFF8F] flex items-center justify-between">
+              <div className="p-1.5 rounded bg-[#121826] border border-[#1E2740] text-xs text-[#3DFF8F] flex items-center justify-between">
                 <span>Gear & RPM</span>
-                <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-[#3DFF8F]/20">ALWAYS ON</span>
+                <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-[#3DFF8F]/20">ALWAYS ON</span>
+              </div>
+              <div className="p-1.5 rounded bg-[#121826] border border-[#19B8C9]/40 text-xs text-[#19B8C9] flex items-center justify-between">
+                <span>Driver Feel Telemetry</span>
+                <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-[#19B8C9]/20 text-[#19B8C9]">LOCKED ON</span>
+              </div>
+              <div className="p-1.5 rounded bg-[#121826] border border-[#3DFF8F]/40 text-xs text-[#3DFF8F] flex items-center justify-between">
+                <span>Cockpit MFD Data</span>
+                <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-[#3DFF8F]/20 text-[#3DFF8F]">LOCKED ON</span>
               </div>
             </div>
 
-            {/* Active Input Groups */}
+            {/* Active Configured Input Groups */}
             <div className="space-y-1 pt-1 text-xs">
               <div className="text-[10px] uppercase font-bold text-[#7C88A6]">Configured Inputs</div>
-              {Object.entries(inputToggles).map(([k, active]) => (
-                <div
-                  key={k}
-                  className={`p-1.5 rounded flex items-center justify-between text-[11px] ${
-                    active ? 'bg-[#121826] text-[#D7DEEC]' : 'text-[#7C88A6] opacity-50'
-                  }`}
-                >
-                  <span className="capitalize">{k.replace('_', ' ')}</span>
-                  <span>{active ? `+${defaultGroupSize} N` : 'OFF'}</span>
-                </div>
-              ))}
+              {Object.entries(inputToggles)
+                .filter(([k]) => k !== 'driver_feel' && k !== 'mfd_data')
+                .map(([k, active]) => (
+                  <div
+                    key={k}
+                    className={`p-1.5 rounded flex items-center justify-between text-[11px] ${
+                      active ? 'bg-[#121826] text-[#D7DEEC]' : 'text-[#7C88A6] opacity-50'
+                    }`}
+                  >
+                    <span className="capitalize">{k.replace('_', ' ')}</span>
+                    <span>{active ? `+${defaultGroupSize} N` : 'OFF'}</span>
+                  </div>
+                ))}
             </div>
           </div>
 
@@ -404,18 +416,32 @@ export const BuilderScreen: React.FC = () => {
         <div className="p-2.5 bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px] flex flex-col justify-between overflow-y-auto">
           <div className="text-xs font-bold text-[#19B8C9] uppercase">Input Toggles</div>
           <div className="space-y-1 overflow-y-auto max-h-28 pr-1 text-[10px]">
-            {Object.entries(inputToggles).map(([k, val]) => (
-              <button
-                key={k}
-                onClick={() => setInputToggles({ ...inputToggles, [k]: !val })}
-                className={`w-full flex items-center justify-between px-2 py-1 rounded transition-colors cursor-pointer ${
-                  val ? 'bg-[#121826] text-[#D7DEEC] font-bold' : 'text-[#7C88A6] hover:bg-[#121826]/40'
-                }`}
-              >
-                <span className="capitalize truncate">{k.replace('_', ' ')}</span>
-                <span className={val ? 'text-[#19B8C9]' : 'text-[#7C88A6]'}>{val ? 'ON' : 'OFF'}</span>
-              </button>
-            ))}
+            {Object.entries(inputToggles).map(([k, val]) => {
+              const isLockedOn = k === 'driver_feel' || k === 'mfd_data';
+              return (
+                <button
+                  key={k}
+                  disabled={isLockedOn}
+                  onClick={() => {
+                    if (isLockedOn) return;
+                    setInputToggles({ ...inputToggles, [k]: !val });
+                  }}
+                  className={`w-full flex items-center justify-between px-2 py-1 rounded transition-colors ${
+                    isLockedOn
+                      ? 'bg-[#121826] border border-[#19B8C9]/40 text-[#19B8C9] font-bold cursor-default'
+                      : val
+                      ? 'bg-[#121826] text-[#D7DEEC] font-bold cursor-pointer'
+                      : 'text-[#7C88A6] hover:bg-[#121826]/40 cursor-pointer'
+                  }`}
+                  title={isLockedOn ? 'Locked ON by telemetry specification' : undefined}
+                >
+                  <span className="capitalize truncate">{k.replace('_', ' ')}</span>
+                  <span className={isLockedOn ? 'text-[#3DFF8F] text-[9px] font-black' : val ? 'text-[#19B8C9]' : 'text-[#7C88A6]'}>
+                    {isLockedOn ? 'LOCKED ON' : val ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -438,6 +464,80 @@ export const BuilderScreen: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Draggable HUD Overlays (Locked as ON in Model Builder) */}
+      <DraggableHUDOverlay
+        title="Driver Feel Telemetry"
+        initialX={45}
+        initialY={140}
+        width={240}
+        lockedOn={true}
+        accentColor="#19B8C9"
+        borderColor="#19B8C9"
+      >
+        <div className="space-y-1.5 text-[10px]">
+          <div className="flex items-center justify-between">
+            <span className="text-[#7C88A6]">G-Force (Lat / Long):</span>
+            <span className="text-[#D7DEEC] font-bold">2.8G / 1.4G</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#7C88A6]">Steering Torque:</span>
+            <span className="text-[#3DFF8F] font-bold">14.2 Nm</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#7C88A6]">Slip Angle (Front):</span>
+            <span className="text-[#FFC247] font-bold">4.2°</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#7C88A6]">Brake Pedal Force:</span>
+            <span className="text-[#19B8C9] font-bold">85 kg</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[#7C88A6]">FFB Kerb Vibration:</span>
+            <span className="text-[#3DFF8F] font-bold">Active</span>
+          </div>
+        </div>
+      </DraggableHUDOverlay>
+
+      <DraggableHUDOverlay
+        title="Cockpit MFD Display"
+        initialX={300}
+        initialY={140}
+        width={270}
+        lockedOn={true}
+        accentColor="#3DFF8F"
+        borderColor="#3DFF8F"
+      >
+        <div className="space-y-2 text-[10px]">
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="p-1 rounded bg-[#121826] border border-[#1E2740]">
+              <div className="text-[#7C88A6] text-[8px]">BRAKE BIAS</div>
+              <div className="text-xs font-bold text-[#D7DEEC]">{carSetupValues['brake.brake_bias_pct'] ?? 54}% F</div>
+            </div>
+            <div className="p-1 rounded bg-[#121826] border border-[#1E2740]">
+              <div className="text-[#7C88A6] text-[8px]">DIFF ON-THROTTLE</div>
+              <div className="text-xs font-bold text-[#19B8C9]">{carSetupValues['differential.on_throttle_pct'] ?? 70}%</div>
+            </div>
+            <div className="p-1 rounded bg-[#121826] border border-[#1E2740]">
+              <div className="text-[#7C88A6] text-[8px]">DIFF OFF-THROTTLE</div>
+              <div className="text-xs font-bold text-[#FFC247]">{carSetupValues['differential.off_throttle_pct'] ?? 55}%</div>
+            </div>
+            <div className="p-1 rounded bg-[#121826] border border-[#1E2740]">
+              <div className="text-[#7C88A6] text-[8px]">ERS DEPLOY</div>
+              <div className="text-xs font-bold text-[#3DFF8F]">HOTLAP</div>
+            </div>
+          </div>
+          <div className="pt-1 border-t border-[#1E2740]">
+            <div className="text-[8px] text-[#7C88A6] mb-0.5">TYRE TEMPS & PRESSURES:</div>
+            <div className="grid grid-cols-2 gap-1 text-[8px] text-center">
+              <div className="p-1 rounded bg-[#121826] text-[#3DFF8F]">FL: 102°C | {carSetupValues['tyres.front_pressure_psi'] ?? 23.5} psi</div>
+              <div className="p-1 rounded bg-[#121826] text-[#3DFF8F]">FR: 104°C | {carSetupValues['tyres.front_pressure_psi'] ?? 23.5} psi</div>
+              <div className="p-1 rounded bg-[#121826] text-[#3DFF8F]">RL: 98°C | {carSetupValues['tyres.rear_pressure_psi'] ?? 21.0} psi</div>
+              <div className="p-1 rounded bg-[#121826] text-[#3DFF8F]">RR: 100°C | {carSetupValues['tyres.rear_pressure_psi'] ?? 21.0} psi</div>
+            </div>
+          </div>
+        </div>
+      </DraggableHUDOverlay>
     </div>
   );
 };

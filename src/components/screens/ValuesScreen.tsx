@@ -110,7 +110,7 @@ export const ValuesScreen: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 h-screen flex p-4 bg-[#07090F] gap-4 overflow-hidden select-none font-mono">
+    <div className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex p-4 bg-[#07090F] gap-4 select-none font-mono">
       {/* Main Parameters Column */}
       <div className="flex-1 flex flex-col justify-between overflow-y-auto pr-1">
         <div>

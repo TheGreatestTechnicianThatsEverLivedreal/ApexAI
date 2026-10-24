@@ -16,6 +16,13 @@ import math
 import random
 import json
 
+# Ensure parent and script directory are in sys.path so f1ui_bridge can always be imported
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PARENT_DIR = os.path.abspath(os.path.join(_CURRENT_DIR, ".."))
+for _p in [_CURRENT_DIR, _PARENT_DIR]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 # Import ApexAI bridge SDK
 from f1ui_bridge import bridge
 
@@ -175,7 +182,8 @@ def main():
                     "time": round(sim_lap_time / 25.0, 3)
                 })
 
-            tyre_health = round(max(20.0, 100.0 - (lap_counter * 3.5) % 80.0), 1)
+            # Tyre health degrades monotonically along a clean downward line without bounce or oscillation
+            tyre_health = round(max(8.0, 100.0 - max(0, lap_counter - 1) * 1.85), 1)
 
             # Reward breakdown
             reward_breakdown = {
@@ -213,12 +221,13 @@ def main():
             # Aggregate push stats
             lap_history.append({"lap": lap_counter, "time": sim_lap_time, "is_push": is_push, "delta": delta})
             push_laps = [l for l in lap_history if l["is_push"]]
-            avg_lap = sum(l["time"] for l in push_laps) / max(1, len(push_laps)) if push_laps else sim_lap_time
+            avg_lap = sum(l["time"] for l in push_laps) / max(1, len(push_laps)) if push_laps else 0.0
             avg_delta = sum(l["delta"] for l in push_laps) / max(1, len(push_laps)) if push_laps else 0.0
+            best_reported = round(best_lap, 3) if best_lap > 0 else (round(sim_lap_time, 3) if is_push else 0.0)
 
             stats = {
                 "phase": phase,
-                "best": round(best_lap if best_lap > 0 else sim_lap_time, 3),
+                "best": best_reported,
                 "avg": round(avg_lap, 3),
                 "fail_rate": 0.0,
                 "fail_top3": ["None"],

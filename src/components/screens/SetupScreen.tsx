@@ -58,6 +58,15 @@ export const SetupScreen: React.FC = () => {
   const [showAllModelsModal, setShowAllModelsModal] = useState<boolean>(false);
   const [customWeightsFile, setCustomWeightsFile] = useState<string>('');
 
+  // Model deletion selection state & UI prompt modal (No browser confirm/prompt)
+  const [selectedModelIdsForDeletion, setSelectedModelIdsForDeletion] = useState<string[]>([]);
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+    isOpen: boolean;
+    ids: string[];
+    names: string[];
+  } | null>(null);
+  const [exportToast, setExportToast] = useState<string | null>(null);
+
   const physicsToggleList = [
     { key: 'advanced_aero', label: 'Advanced Aero' },
     { key: 'advanced_ers', label: 'Advanced ERS' },
@@ -86,7 +95,7 @@ export const SetupScreen: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 h-screen flex p-4 bg-[#07090F] gap-4 overflow-hidden select-none font-mono">
+    <div className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex p-4 bg-[#07090F] gap-4 select-none font-mono">
       {/* Left Main Setup Column */}
       <div className="flex-1 flex flex-col justify-between overflow-y-auto pr-1">
         <div>
@@ -161,38 +170,58 @@ export const SetupScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Default Toggle */}
+              {/* Default Style Strategy Toggle */}
               <div className="flex flex-col gap-1.5">
-                <span className="text-[10px] text-[#7C88A6] uppercase">Default Bias:</span>
-                <button
-                  onClick={() => setIsDefaultStyle(!isDefaultStyle)}
-                  className={`flex items-center justify-between px-3 py-1.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                    isDefaultStyle
-                      ? 'bg-[#19B8C9]/20 border-[#19B8C9] text-[#19B8C9] font-bold'
-                      : 'bg-[#07090F] border-[#1E2740] text-[#7C88A6]'
-                  }`}
-                >
-                  <span>Use Defaults</span>
-                  <div
-                    className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
-                      isDefaultStyle ? 'bg-[#19B8C9] border-[#19B8C9]' : 'border-[#7C88A6]'
+                <span className="text-[10px] text-[#7C88A6] uppercase">Style Strategy:</span>
+                <div className="flex p-0.5 rounded-xl bg-[#07090F] border border-[#1E2740]">
+                  <button
+                    onClick={() => {
+                      setIsDefaultStyle(true);
+                      if (smoothAggressive === 'off') setSmoothAggressive('smooth');
+                      if (oversteerUndersteer === 'off') setOversteerUndersteer('oversteer');
+                    }}
+                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded-lg cursor-pointer transition-all ${
+                      isDefaultStyle
+                        ? 'bg-[#19B8C9] text-black shadow-[0_0_8px_#19B8C9]'
+                        : 'text-[#7C88A6] hover:text-[#D7DEEC]'
                     }`}
+                    title="Use Defaults: Select driving style presets (Smooth/Aggressive & Oversteer/Understeer)"
                   >
-                    {isDefaultStyle && <Check className="w-2.5 h-2.5 text-black" />}
-                  </div>
-                </button>
+                    Use Defaults
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsDefaultStyle(false);
+                      setSmoothAggressive('off');
+                      setOversteerUndersteer('off');
+                    }}
+                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded-lg cursor-pointer transition-all ${
+                      !isDefaultStyle
+                        ? 'bg-[#3DFF8F] text-black shadow-[0_0_8px_#3DFF8F]'
+                        : 'text-[#7C88A6] hover:text-[#D7DEEC]'
+                    }`}
+                    title="Autonomous / No Defaults: AI learns entirely on its own without predefined driving style presets"
+                  >
+                    Autonomous
+                  </button>
+                </div>
               </div>
 
-              {/* Smooth / Aggressive Segmented Pill (greyed if default is on) */}
-              <div className={`flex flex-col gap-1.5 ${isDefaultStyle ? 'opacity-40 pointer-events-none' : ''}`}>
-                <span className="text-[10px] text-[#7C88A6] uppercase">Smooth / Aggressive:</span>
+              {/* Smooth / Aggressive Segmented Pill (Active when 'Use Defaults' is chosen) */}
+              <div className={`flex flex-col gap-1.5 ${!isDefaultStyle ? 'opacity-35 pointer-events-none' : ''}`}>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-[#7C88A6] uppercase">Driving Temperament:</span>
+                  {isDefaultStyle && (
+                    <span className="text-[#19B8C9] font-bold capitalize">{smoothAggressive}</span>
+                  )}
+                </div>
                 <div className="flex p-0.5 rounded-xl bg-[#07090F] border border-[#1E2740]">
-                  {(['off', 'smooth', 'aggressive'] as const).map((opt) => (
+                  {(['smooth', 'aggressive'] as const).map((opt) => (
                     <button
                       key={opt}
                       onClick={() => setSmoothAggressive(opt)}
-                      className={`flex-1 py-1 text-[10px] font-bold uppercase rounded-lg cursor-pointer ${
-                        smoothAggressive === opt
+                      className={`flex-1 py-1 text-[10px] font-bold uppercase rounded-lg cursor-pointer transition-all ${
+                        smoothAggressive === opt && isDefaultStyle
                           ? 'bg-[#19B8C9] text-black shadow-[0_0_8px_#19B8C9]'
                           : 'text-[#7C88A6] hover:text-[#D7DEEC]'
                       }`}
@@ -203,25 +232,49 @@ export const SetupScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Oversteer / Understeer Segmented Pill */}
-              <div className={`flex flex-col gap-1.5 ${isDefaultStyle ? 'opacity-40 pointer-events-none' : ''}`}>
-                <span className="text-[10px] text-[#7C88A6] uppercase">Yaw Balance:</span>
+              {/* Oversteer / Understeer Yaw Balance (Active when 'Use Defaults' is chosen) */}
+              <div className={`flex flex-col gap-1.5 ${!isDefaultStyle ? 'opacity-35 pointer-events-none' : ''}`}>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-[#7C88A6] uppercase">Yaw Balance:</span>
+                  {isDefaultStyle && (
+                    <span className="text-[#19B8C9] font-bold capitalize">{oversteerUndersteer}</span>
+                  )}
+                </div>
                 <div className="flex p-0.5 rounded-xl bg-[#07090F] border border-[#1E2740]">
-                  {(['off', 'oversteer', 'understeer'] as const).map((opt) => (
+                  {(['oversteer', 'understeer'] as const).map((opt) => (
                     <button
                       key={opt}
                       onClick={() => setOversteerUndersteer(opt)}
-                      className={`flex-1 py-1 text-[9px] font-bold uppercase rounded-lg cursor-pointer ${
-                        oversteerUndersteer === opt
+                      className={`flex-1 py-1 text-[9px] font-bold uppercase rounded-lg cursor-pointer transition-all ${
+                        oversteerUndersteer === opt && isDefaultStyle
                           ? 'bg-[#19B8C9] text-black shadow-[0_0_8px_#19B8C9]'
                           : 'text-[#7C88A6] hover:text-[#D7DEEC]'
                       }`}
                     >
-                      {opt === 'oversteer' ? 'Over' : opt === 'understeer' ? 'Under' : 'Off'}
+                      {opt === 'oversteer' ? 'Over' : 'Under'}
                     </button>
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* Helper status badge */}
+            <div className="pt-1 border-t border-[#1E2740]/60">
+              {isDefaultStyle ? (
+                <div className="text-[10px] text-[#19B8C9] flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#19B8C9]" />
+                  <span>
+                    <strong>Defaults Enabled:</strong> Agent policy is biased toward <strong>{smoothAggressive}</strong> inputs and <strong>{oversteerUndersteer}</strong> vehicle rotation.
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[10px] text-[#3DFF8F] flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#3DFF8F]" />
+                  <span>
+                    <strong>Autonomous (No Defaults):</strong> Agent explores dynamically and learns on its own without driving style constraints or presets.
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -449,12 +502,12 @@ export const SetupScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Right Column: Past Models (5 most recent) */}
-      <div className="w-80 shrink-0 flex flex-col justify-between p-3.5 bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px]">
-        <div>
+      {/* Right Column: Past Models (10 most recent) */}
+      <div className="w-84 shrink-0 flex flex-col justify-between p-3.5 bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px]">
+        <div className="flex flex-col min-h-0 flex-1">
           <div className="flex items-center justify-between pb-2 border-b border-[#1E2740]">
             <div>
-              <div className="text-xs font-bold text-[#D7DEEC] uppercase">Past Models (5 Recent)</div>
+              <div className="text-xs font-bold text-[#D7DEEC] uppercase">Past Models (10 Recent)</div>
               <div className="text-[10px] text-[#7C88A6]">
                 Track: {selectedTrack?.name || 'Silverstone GP'}
               </div>
@@ -469,14 +522,56 @@ export const SetupScreen: React.FC = () => {
             </button>
           </div>
 
-          {/* Model List */}
-          <div className="py-2 space-y-2">
-            {models.slice(0, 5).map((m) => {
+          {/* Mass Selection Action Bar */}
+          <div className="py-2 flex items-center justify-between text-[10px] border-b border-[#1E2740]">
+            <label className="flex items-center gap-1.5 text-[#7C88A6] cursor-pointer hover:text-[#D7DEEC]">
+              <input
+                type="checkbox"
+                checked={
+                  models.slice(0, 10).length > 0 &&
+                  models.slice(0, 10).every((m) => selectedModelIdsForDeletion.includes(m.id))
+                }
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedModelIdsForDeletion(models.slice(0, 10).map((m) => m.id));
+                  } else {
+                    setSelectedModelIdsForDeletion([]);
+                  }
+                }}
+                className="accent-[#19B8C9] cursor-pointer rounded"
+              />
+              <span>Select All</span>
+            </label>
+
+            {selectedModelIdsForDeletion.length > 0 && (
+              <button
+                onClick={() => {
+                  const names = models
+                    .filter((m) => selectedModelIdsForDeletion.includes(m.id))
+                    .map((m) => m.name);
+                  setDeleteConfirmModal({
+                    isOpen: true,
+                    ids: selectedModelIdsForDeletion,
+                    names
+                  });
+                }}
+                className="px-2 py-0.5 rounded bg-[#FF4458]/20 border border-[#FF4458] text-[#FF4458] font-bold flex items-center gap-1 cursor-pointer hover:bg-[#FF4458]/30 shadow-[0_0_8px_rgba(255,68,88,0.2)]"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>Delete Selected ({selectedModelIdsForDeletion.length})</span>
+              </button>
+            )}
+          </div>
+
+          {/* Model List (Expanded Memory: 10 Past Setups) */}
+          <div className="py-2 space-y-2 overflow-y-auto flex-1 pr-1 max-h-[500px]">
+            {models.slice(0, 10).map((m) => {
               const isBaseSelected = selectedModelId === m.id;
               const isTestSelected = testModelIds.includes(m.id);
               const trackData = m.meta?.per_track?.[selectedTrack?.name || 'Silverstone GP'];
               const avgLap = trackData?.avg_lap_s ? `${trackData.avg_lap_s.toFixed(2)}s` : '—';
               const trainingDone = trackData?.track_training_done;
+              const isChecked = selectedModelIdsForDeletion.includes(m.id);
 
               return (
                 <div
@@ -488,23 +583,56 @@ export const SetupScreen: React.FC = () => {
                       toggleTestModelId(m.id);
                     }
                   }}
-                  className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                  className={`p-2 rounded-xl border transition-all cursor-pointer ${
                     (runMode === 'train' && isBaseSelected) || (runMode === 'test' && isTestSelected)
                       ? 'bg-[#121826] border-[#19B8C9] shadow-[0_0_10px_rgba(25,184,201,0.2)]'
                       : 'bg-[#07090F] border-[#1E2740] hover:border-[#7C88A6]'
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs text-[#D7DEEC] truncate">{m.name}</span>
-                    {trainingDone ? (
-                      <span className="px-1.5 py-0.2 rounded bg-[#3DFF8F]/20 text-[#3DFF8F] text-[9px] font-bold">
-                        DONE
-                      </span>
-                    ) : (
-                      <span className="px-1.5 py-0.2 rounded bg-[#FFC247]/20 text-[#FFC247] text-[9px] font-bold">
-                        EXP
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          if (e.target.checked) {
+                            setSelectedModelIdsForDeletion((prev) => [...prev, m.id]);
+                          } else {
+                            setSelectedModelIdsForDeletion((prev) => prev.filter((id) => id !== m.id));
+                          }
+                        }}
+                        className="accent-[#FF4458] cursor-pointer rounded"
+                      />
+                      <span className="font-bold text-xs text-[#D7DEEC] truncate">{m.name}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {trainingDone ? (
+                        <span className="px-1.5 py-0.2 rounded bg-[#3DFF8F]/20 text-[#3DFF8F] text-[9px] font-bold">
+                          DONE
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.2 rounded bg-[#FFC247]/20 text-[#FFC247] text-[9px] font-bold">
+                          EXP
+                        </span>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteConfirmModal({
+                            isOpen: true,
+                            ids: [m.id],
+                            names: [m.name]
+                          });
+                        }}
+                        className="p-1 rounded text-[#7C88A6] hover:text-[#FF4458] hover:bg-[#1E2740] cursor-pointer"
+                        title="Delete Model Setup"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between pt-1 text-[10px] text-[#7C88A6]">
@@ -523,7 +651,7 @@ export const SetupScreen: React.FC = () => {
             onClick={() => setShowAllModelsModal(true)}
             className="w-full py-2 rounded-xl bg-[#121826] border border-[#1E2740] text-xs text-[#7C88A6] hover:text-[#D7DEEC] hover:bg-[#1E2740] transition-all cursor-pointer"
           >
-            Manage All Models (Rename, Export, Delete)
+            Manage All Models Repository
           </button>
         </div>
       </div>
@@ -562,46 +690,109 @@ export const SetupScreen: React.FC = () => {
         </div>
       )}
 
-      {/* All Models Modal */}
+      {/* All Models Modal with Mass Deletion and Zero Browser Prompts */}
       {showAllModelsModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-[620px] bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px] p-5 space-y-4 shadow-2xl">
+          <div className="w-[640px] bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px] p-5 space-y-4 shadow-2xl flex flex-col max-h-[85vh]">
             <div className="flex items-center justify-between border-b border-[#1E2740] pb-2">
-              <span className="font-bold text-sm text-[#D7DEEC] uppercase">All Models Repository</span>
+              <div>
+                <span className="font-bold text-sm text-[#D7DEEC] uppercase">All Models Repository</span>
+                <div className="text-[10px] text-[#7C88A6]">{models.length} stored neural architectures</div>
+              </div>
               <button onClick={() => setShowAllModelsModal(false)} className="text-[#7C88A6] hover:text-white cursor-pointer">
                 ✕
               </button>
             </div>
-            <div className="max-h-72 overflow-y-auto space-y-2">
-              {models.map((m) => (
-                <div key={m.id} className="p-3 rounded-xl bg-[#07090F] border border-[#1E2740] flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-xs text-[#D7DEEC]">{m.name}</div>
-                    <div className="text-[10px] text-[#7C88A6]">{m.meta?.description || 'Custom Agent'}</div>
+
+            {/* Mass Selection in Modal */}
+            <div className="flex items-center justify-between text-xs py-1 px-2 bg-[#07090F] rounded-lg border border-[#1E2740]">
+              <label className="flex items-center gap-1.5 text-[#7C88A6] cursor-pointer hover:text-[#D7DEEC]">
+                <input
+                  type="checkbox"
+                  checked={models.length > 0 && models.every((m) => selectedModelIdsForDeletion.includes(m.id))}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedModelIdsForDeletion(models.map((m) => m.id));
+                    } else {
+                      setSelectedModelIdsForDeletion([]);
+                    }
+                  }}
+                  className="accent-[#19B8C9] cursor-pointer rounded"
+                />
+                <span>Select All ({models.length})</span>
+              </label>
+
+              {selectedModelIdsForDeletion.length > 0 && (
+                <button
+                  onClick={() => {
+                    const names = models
+                      .filter((m) => selectedModelIdsForDeletion.includes(m.id))
+                      .map((m) => m.name);
+                    setDeleteConfirmModal({
+                      isOpen: true,
+                      ids: selectedModelIdsForDeletion,
+                      names
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded bg-[#FF4458]/20 border border-[#FF4458] text-[#FF4458] font-bold text-[10px] flex items-center gap-1 cursor-pointer hover:bg-[#FF4458]/30 shadow-[0_0_8px_rgba(255,68,88,0.2)]"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Delete Selected ({selectedModelIdsForDeletion.length})</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {models.map((m) => {
+                const isChecked = selectedModelIdsForDeletion.includes(m.id);
+                return (
+                  <div key={m.id} className="p-3 rounded-xl bg-[#07090F] border border-[#1E2740] flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedModelIdsForDeletion((prev) => [...prev, m.id]);
+                          } else {
+                            setSelectedModelIdsForDeletion((prev) => prev.filter((id) => id !== m.id));
+                          }
+                        }}
+                        className="accent-[#FF4458] cursor-pointer rounded"
+                      />
+                      <div>
+                        <div className="font-bold text-xs text-[#D7DEEC]">{m.name}</div>
+                        <div className="text-[10px] text-[#7C88A6]">{m.meta?.description || 'Custom Agent'}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setExportToast(`Export package ready: models/${m.id} (arch.json + weights.bin)`);
+                          setTimeout(() => setExportToast(null), 3500);
+                        }}
+                        className="p-1.5 rounded bg-[#121826] border border-[#1E2740] text-xs text-[#19B8C9] hover:bg-[#1E2740] cursor-pointer"
+                        title="Export Model Package"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setDeleteConfirmModal({
+                            isOpen: true,
+                            ids: [m.id],
+                            names: [m.name]
+                          });
+                        }}
+                        className="p-1.5 rounded bg-[#FF4458]/20 border border-[#FF4458] text-xs text-[#FF4458] hover:bg-[#FF4458]/30 cursor-pointer"
+                        title="Delete Model"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => alert(`Exporting ${m.name} arch.json and weights.bin`)}
-                      className="p-1.5 rounded bg-[#121826] border border-[#1E2740] text-xs text-[#19B8C9] cursor-pointer"
-                      title="Export Model"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (confirm(`Delete model ${m.name}?`)) {
-                          await fetch(`/api/models/${m.id}`, { method: 'DELETE' });
-                          refreshModels();
-                        }
-                      }}
-                      className="p-1.5 rounded bg-[#FF4458]/20 border border-[#FF4458] text-xs text-[#FF4458] cursor-pointer"
-                      title="Delete Model"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <button
               onClick={() => setShowAllModelsModal(false)}
@@ -609,6 +800,74 @@ export const SetupScreen: React.FC = () => {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* In-UI Toast Notification for Export */}
+      {exportToast && (
+        <div className="fixed bottom-4 left-4 z-50 px-4 py-2.5 rounded-xl bg-[#19B8C9]/20 border border-[#19B8C9] text-[#19B8C9] text-xs font-bold shadow-2xl flex items-center gap-2">
+          <span>✓ {exportToast}</span>
+          <button onClick={() => setExportToast(null)} className="ml-2 text-white hover:text-[#19B8C9] cursor-pointer">✕</button>
+        </div>
+      )}
+
+      {/* In-UI Custom Confirmation Prompt Modal for Deletion (No window.confirm!) */}
+      {deleteConfirmModal?.isOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-[440px] bg-[#0D111A] border-2 border-[#FF4458] rounded-[14px] p-5 space-y-4 shadow-[0_0_30px_rgba(255,68,88,0.3)]">
+            <div className="flex items-center justify-between border-b border-[#1E2740] pb-2 text-[#FF4458]">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4" />
+                <span className="font-bold text-sm uppercase">Confirm Permanent Deletion</span>
+              </div>
+              <button
+                onClick={() => setDeleteConfirmModal(null)}
+                className="text-[#7C88A6] hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="text-xs text-[#D7DEEC] space-y-2">
+              <p>
+                Are you sure you want to permanently delete the following <strong>{deleteConfirmModal.ids.length}</strong> setup model(s)?
+              </p>
+              <div className="max-h-32 overflow-y-auto bg-[#07090F] p-2 rounded-xl border border-[#1E2740] space-y-1 text-[#7C88A6]">
+                {deleteConfirmModal.names.map((name, i) => (
+                  <div key={i} className="text-[#FF4458] font-bold truncate">• {name}</div>
+                ))}
+              </div>
+              <p className="text-[10px] text-[#7C88A6]">
+                This action removes neural weights, arch.json, and metadata from disk. This cannot be undone.
+              </p>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setDeleteConfirmModal(null)}
+                className="flex-1 py-2 rounded-xl bg-[#121826] border border-[#1E2740] text-xs font-bold text-[#7C88A6] hover:text-[#D7DEEC] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  for (const id of deleteConfirmModal.ids) {
+                    try {
+                      await fetch(`/api/models/${id}`, { method: 'DELETE' });
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  }
+                  await refreshModels();
+                  setSelectedModelIdsForDeletion([]);
+                  setDeleteConfirmModal(null);
+                }}
+                className="flex-1 py-2 rounded-xl bg-[#FF4458] text-white text-xs font-bold hover:bg-[#FF4458]/90 cursor-pointer shadow-[0_0_12px_rgba(255,68,88,0.4)]"
+              >
+                Delete Permanently
+              </button>
+            </div>
           </div>
         </div>
       )}

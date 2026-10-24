@@ -126,4 +126,7 @@ export interface TrackData {
     grip_mu: number;
     solid: boolean;
   }[];
+  centreline_points?: any[];
+  spline_nodes?: any[];
+  pitlane?: any;
 }

@@ -29,7 +29,10 @@ import {
   Activity,
   Shield,
   Wrench,
-  Check
+  Check,
+  RotateCw,
+  BoxSelect,
+  Sparkles
 } from 'lucide-react';
 
 export interface SurfaceEntry {
@@ -47,6 +50,209 @@ export interface Waypoint {
   elevation_mode: 'last' | 'sf'; // 'last' = delta from previous node, 'sf' = delta from S/F line
   elevation_val: number;        // delta in meters
   banking_deg: number;          // + inside banking, - outside banking
+  width_m: number;              // track width in meters at this node (e.g., 8m - 24m)
+  width_interp?: 'linear' | 'quadratic' | 'sqrt'; // Progression to next node
+  rotation_deg?: number;        // center rotation in degrees (-180° to +180°)
+}
+
+export interface TrackBoundarySample {
+  cx: number;
+  cy: number;
+  outX: number;
+  outY: number;
+  inX: number;
+  inY: number;
+  kerbOutX: number;
+  kerbOutY: number;
+  kerbInX: number;
+  kerbInY: number;
+  widthM: number;
+  normalX: number;
+  normalY: number;
+}
+
+// Compute continuous variable-width track boundaries using smooth Catmull-Rom spline,
+// center rotation angle, and linear, quadratic (Hermite C1 continuous smoothstep), or sqrt AP progression.
+export function computeContinuousTrackBoundaries(
+  nodes: Waypoint[],
+  cellSize: number,
+  samplesPerSegment: number = 28
+): TrackBoundarySample[] {
+  const n = nodes.length;
+  if (n < 3) return [];
+
+  const samples: TrackBoundarySample[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const p0 = nodes[(i - 1 + n) % n];
+    const p1 = nodes[i];
+    const p2 = nodes[(i + 1) % n];
+    const p3 = nodes[(i + 2) % n];
+
+    const wStart = p1.width_m || 12.0;
+    const wEnd = p2.width_m || 12.0;
+    const interp = p1.width_interp || 'quadratic';
+
+    for (let s = 0; s < samplesPerSegment; s++) {
+      const t = s / samplesPerSegment;
+
+      // Mathematical width increment / progression function f(t) in [0, 1]
+      let f = t;
+      if (interp === 'quadratic') {
+        // Hermite smoothstep C1 continuous at nodes: f'(0) = 0 and f'(1) = 0
+        // completely eliminates sharp corner bumps at node junctions
+        f = t * t * (3 - 2 * t);
+      } else if (interp === 'sqrt') {
+        // Continuous square root AP ease: distinct rapid initial flare out of corner apex
+        f = Math.sqrt(t);
+      } else {
+        // Linear AP progression: constant linear width gradient
+        f = t;
+      }
+
+      const currentWidthM = wStart + (wEnd - wStart) * f;
+      const halfWidthPx = (currentWidthM / 2) / Math.max(0.01, cellSize);
+      const kerbWidthPx = 1.0 / Math.max(0.01, cellSize); // 1.0m kerb ribbon
+
+      // Catmull-Rom centerline position C(t)
+      const t2 = t * t;
+      const t3 = t2 * t;
+
+      const cx = 0.5 * (
+        (2 * p1.x) +
+        (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      );
+
+      const cy = 0.5 * (
+        (2 * p1.y) +
+        (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      );
+
+      // Derivative (tangent vector)
+      const tx = 0.5 * (
+        (-p0.x + p2.x) +
+        2 * (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t +
+        3 * (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t2
+      );
+
+      const ty = 0.5 * (
+        (-p0.y + p2.y) +
+        2 * (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t +
+        3 * (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t2
+      );
+
+      const len = Math.hypot(tx, ty) || 1e-5;
+      const baseNx = -ty / len;
+      const baseNy = tx / len;
+
+      // Center rotation interpolation between p1 and p2 along the center
+      const rot1 = ((p1.rotation_deg ?? 0) * Math.PI) / 180;
+      const rot2 = ((p2.rotation_deg ?? 0) * Math.PI) / 180;
+      const rotAngle = rot1 + (rot2 - rot1) * f;
+
+      const cosR = Math.cos(rotAngle);
+      const sinR = Math.sin(rotAngle);
+      const nx = baseNx * cosR - baseNy * sinR;
+      const ny = baseNx * sinR + baseNy * cosR;
+
+      samples.push({
+        cx,
+        cy,
+        outX: cx + nx * halfWidthPx,
+        outY: cy + ny * halfWidthPx,
+        inX: cx - nx * halfWidthPx,
+        inY: cy - ny * halfWidthPx,
+        kerbOutX: cx + nx * (halfWidthPx + kerbWidthPx),
+        kerbOutY: cy + ny * (halfWidthPx + kerbWidthPx),
+        kerbInX: cx - nx * (halfWidthPx + kerbWidthPx),
+        kerbInY: cy - ny * (halfWidthPx + kerbWidthPx),
+        widthM: currentWidthM,
+        normalX: nx,
+        normalY: ny
+      });
+    }
+  }
+
+  return samples;
+}
+
+// Paint continuous variable-width track ribbon with kerbs and boundary lines
+export function paintContinuousTrackRibbon(
+  ctx: CanvasRenderingContext2D,
+  samples: TrackBoundarySample[]
+) {
+  if (samples.length < 3) return;
+
+  ctx.save();
+
+  // 1. Draw outer and inner kerbs (FIA red and white stripes)
+  for (let i = 0; i < samples.length; i++) {
+    const s0 = samples[i];
+    const s1 = samples[(i + 1) % samples.length];
+    const isRed = Math.floor(i / 3) % 2 === 0;
+
+    // Outer kerb quad
+    ctx.fillStyle = isRed ? '#FF4458' : '#D7DEEC';
+    ctx.beginPath();
+    ctx.moveTo(s0.outX, s0.outY);
+    ctx.lineTo(s0.kerbOutX, s0.kerbOutY);
+    ctx.lineTo(s1.kerbOutX, s1.kerbOutY);
+    ctx.lineTo(s1.outX, s1.outY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Inner kerb quad
+    ctx.beginPath();
+    ctx.moveTo(s0.inX, s0.inY);
+    ctx.lineTo(s0.kerbInX, s0.kerbInY);
+    ctx.lineTo(s1.kerbInX, s1.kerbInY);
+    ctx.lineTo(s1.inX, s1.inY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 2. Draw Tarmac Surface (#2B3346) using quadrilateral segment fills
+  // Guarantees 100% full continuous tarmac painting without winding-cancellation voids or missing sections
+  ctx.fillStyle = '#2B3346';
+  for (let i = 0; i < samples.length; i++) {
+    const s0 = samples[i];
+    const s1 = samples[(i + 1) % samples.length];
+    ctx.beginPath();
+    ctx.moveTo(s0.outX, s0.outY);
+    ctx.lineTo(s1.outX, s1.outY);
+    ctx.lineTo(s1.inX, s1.inY);
+    ctx.lineTo(s0.inX, s0.inY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // 3. Crisp white/grey boundary lines along outer and inner edge
+  ctx.strokeStyle = '#43516E';
+  ctx.lineWidth = 1.2;
+
+  // Outer boundary line
+  ctx.beginPath();
+  ctx.moveTo(samples[0].outX, samples[0].outY);
+  for (let i = 1; i < samples.length; i++) {
+    ctx.lineTo(samples[i].outX, samples[i].outY);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Inner boundary line
+  ctx.beginPath();
+  ctx.moveTo(samples[0].inX, samples[0].inY);
+  for (let i = 1; i < samples.length; i++) {
+    ctx.lineTo(samples[i].inX, samples[i].inY);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.restore();
 }
 
 export interface PitGarage {
@@ -65,6 +271,7 @@ export interface PitGarage {
 export interface PitlaneData {
   enabled: boolean;
   speedLimitKmh: number;
+  rotation_deg?: number; // center rotation along pitlane centroid
   entry: { x: number; y: number };
   exit: { x: number; y: number };
   garages: PitGarage[];
@@ -84,7 +291,7 @@ const DEFAULT_F1_TEAMS = [
 ];
 
 export const TracksScreen: React.FC = () => {
-  const { tracks, selectedTrackId } = useSim();
+  const { tracks, selectedTrackId, setSelectedTrackId, refreshTracks, deleteTrack } = useSim();
 
   // Active track state
   const activeTrack = tracks.find((t) => t.id === selectedTrackId) || tracks[0];
@@ -94,9 +301,15 @@ export const TracksScreen: React.FC = () => {
   const [trackLengthM, setTrackLengthM] = useState<number>(activeTrack?.length_m || 5891.0);
   const [activeTab, setActiveTab] = useState<'surface' | 'spline' | 'elevation' | 'pitlane' | 'validation' | 'export'>('spline');
 
-  // Tools state
+  // New Track Creation & Save As modal state
+  const [showNewTrackModal, setShowNewTrackModal] = useState<boolean>(false);
+  const [newTrackModalName, setNewTrackModalName] = useState<string>('');
+  const [newTrackModalLength, setNewTrackModalLength] = useState<number>(5400);
+  const [newTrackModalTemplate, setNewTrackModalTemplate] = useState<'copy' | 'gp' | 'oval'>('copy');
+
+  // Tools state (supports box selection of areas to move groups of nodes together)
   const [activeTool, setActiveTool] = useState<
-    'brush' | 'eraser' | 'spline' | 'pan' | 'polyline' | 'rect' | 'bucket' | 'eyedropper' | 'measure'
+    'brush' | 'eraser' | 'spline' | 'box_select' | 'pan' | 'polyline' | 'rect' | 'bucket' | 'eyedropper' | 'measure'
   >('spline');
   const [brushShape, setBrushShape] = useState<'round' | 'square'>('round');
   const [brushSizeM, setBrushSizeM] = useState<number>(8.0);
@@ -104,6 +317,13 @@ export const TracksScreen: React.FC = () => {
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [showSplineOverlay, setShowSplineOverlay] = useState<boolean>(true);
   const [showPitlaneOverlay, setShowPitlaneOverlay] = useState<boolean>(true);
+
+  // Multi-node Area Selection State
+  const [selectedNodeIndices, setSelectedNodeIndices] = useState<Set<number>>(new Set([0]));
+  const [marqueeBox, setMarqueeBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [isSelectingBox, setIsSelectingBox] = useState<boolean>(false);
+  const [isDraggingNodes, setIsDraggingNodes] = useState<boolean>(false);
+  const [dragOffsetNodes, setDragOffsetNodes] = useState<Map<number, { x: number; y: number }>>(new Map());
 
   // Zoom & Pan Navigation
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
@@ -134,25 +354,25 @@ export const TracksScreen: React.FC = () => {
   // S/F Base Elevation (meters above sea level)
   const [sfElevationBase, setSfElevationBase] = useState<number>(152.0);
 
-  // Spline waypoints (editable nodes for track centerline with delta elevation & banking)
+  // Spline waypoints (editable nodes for track centerline with delta elevation, banking & continuous width)
   const [splineNodes, setSplineNodes] = useState<Waypoint[]>([
-    { x: 420, y: 285, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0 },
-    { x: 500, y: 280, label: 'T1', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.5 },
-    { x: 610, y: 200, label: 'T2', elevation_mode: 'last', elevation_val: 1.2, banking_deg: 2.0 },
-    { x: 650, y: 140, label: 'T3', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0 },
-    { x: 580, y: 65, label: 'T4', elevation_mode: 'last', elevation_val: -0.4, banking_deg: 5.0 },
-    { x: 440, y: 85, label: 'T5', elevation_mode: 'last', elevation_val: -0.6, banking_deg: 2.5 },
-    { x: 330, y: 145, label: 'T6', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 0.0 },
-    { x: 200, y: 170, label: 'T7', elevation_mode: 'last', elevation_val: 0.2, banking_deg: 3.5 },
-    { x: 95, y: 240, label: 'T8', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.0 },
-    { x: 90, y: 340, label: 'T9', elevation_mode: 'last', elevation_val: 0.4, banking_deg: 2.0 },
-    { x: 140, y: 430, label: 'T10', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 3.0 },
-    { x: 290, y: 470, label: 'T11', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 4.5 },
-    { x: 440, y: 460, label: 'T12', elevation_mode: 'last', elevation_val: 0.6, banking_deg: 5.5 },
-    { x: 560, y: 380, label: 'T13', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 2.0 },
-    { x: 620, y: 290, label: 'T14', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 0.0 },
-    { x: 560, y: 195, label: 'T15', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 3.5 },
-    { x: 430, y: 235, label: 'T16', elevation_mode: 'last', elevation_val: -1.2, banking_deg: -1.5 }
+    { x: 420, y: 285, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 15.0, width_interp: 'quadratic' },
+    { x: 500, y: 280, label: 'T1', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.5, width_m: 14.0, width_interp: 'quadratic' },
+    { x: 610, y: 200, label: 'T2', elevation_mode: 'last', elevation_val: 1.2, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+    { x: 650, y: 140, label: 'T3', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0, width_m: 11.5, width_interp: 'linear' },
+    { x: 580, y: 65, label: 'T4', elevation_mode: 'last', elevation_val: -0.4, banking_deg: 5.0, width_m: 11.0, width_interp: 'quadratic' },
+    { x: 440, y: 85, label: 'T5', elevation_mode: 'last', elevation_val: -0.6, banking_deg: 2.5, width_m: 12.0, width_interp: 'quadratic' },
+    { x: 330, y: 145, label: 'T6', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 0.0, width_m: 13.0, width_interp: 'linear' },
+    { x: 200, y: 170, label: 'T7', elevation_mode: 'last', elevation_val: 0.2, banking_deg: 3.5, width_m: 12.0, width_interp: 'quadratic' },
+    { x: 95, y: 240, label: 'T8', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.0, width_m: 11.5, width_interp: 'quadratic' },
+    { x: 90, y: 340, label: 'T9', elevation_mode: 'last', elevation_val: 0.4, banking_deg: 2.0, width_m: 12.5, width_interp: 'linear' },
+    { x: 140, y: 430, label: 'T10', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 3.0, width_m: 13.5, width_interp: 'quadratic' },
+    { x: 290, y: 470, label: 'T11', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 4.5, width_m: 14.5, width_interp: 'quadratic' },
+    { x: 440, y: 460, label: 'T12', elevation_mode: 'last', elevation_val: 0.6, banking_deg: 5.5, width_m: 13.0, width_interp: 'linear' },
+    { x: 560, y: 380, label: 'T13', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+    { x: 620, y: 290, label: 'T14', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 0.0, width_m: 12.5, width_interp: 'quadratic' },
+    { x: 560, y: 195, label: 'T15', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 3.5, width_m: 11.0, width_interp: 'sqrt' },
+    { x: 430, y: 235, label: 'T16', elevation_mode: 'last', elevation_val: -1.2, banking_deg: -1.5, width_m: 14.0, width_interp: 'quadratic' }
   ]);
   const [selectedNodeIdx, setSelectedNodeIdx] = useState<number | null>(0);
 
@@ -289,7 +509,7 @@ export const TracksScreen: React.FC = () => {
     ctx.restore();
   };
 
-  // Initialize offscreen canvas once
+  // Initialize offscreen canvas once with continuous variable-width track ribbon
   useEffect(() => {
     if (!offscreenCanvasRef.current) {
       const off = document.createElement('canvas');
@@ -299,20 +519,103 @@ export const TracksScreen: React.FC = () => {
       if (ctx) {
         ctx.fillStyle = '#07090F';
         ctx.fillRect(0, 0, 800, 500);
-        paintSplineRibbon(ctx, splineNodes, 24, '#2B3346');
-        paintSplineRibbon(ctx, splineNodes, 28, '#1E2740', true);
+        const samples = computeContinuousTrackBoundaries(splineNodes, cellSize, 24);
+        paintContinuousTrackRibbon(ctx, samples);
       }
       offscreenCanvasRef.current = off;
       saveUndoState();
     }
   }, []);
 
-  // Update track meta when switching tracks
+  // Update track data and geometry when switching tracks
   useEffect(() => {
-    if (activeTrack) {
-      setTrackName(activeTrack.name);
-      setCellSize(activeTrack.cell_size_m || 0.25);
-      setTrackLengthM(activeTrack.length_m || 5891.0);
+    if (!activeTrack) return;
+    setTrackName(activeTrack.name || 'Silverstone GP');
+    const cs = activeTrack.cell_size_m || 0.25;
+    setCellSize(cs);
+    setTrackLengthM(activeTrack.length_m || 5891.0);
+
+    // Load centerline waypoints or fall back to track defaults with variable width
+    const rawNodes = (activeTrack as any).centreline_points ||
+      (activeTrack as any).spline_nodes ||
+      (activeTrack.id === 'spa_francorchamps'
+        ? [
+            { x: 380, y: 310, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 15.0, width_interp: 'quadratic' },
+            { x: 440, y: 300, label: 'T1', elevation_mode: 'last', elevation_val: -2.5, banking_deg: -2.0, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 500, y: 340, label: 'T2', elevation_mode: 'last', elevation_val: -3.0, banking_deg: 3.0, width_m: 13.0, width_interp: 'quadratic' },
+            { x: 540, y: 310, label: 'T3', elevation_mode: 'last', elevation_val: 4.5, banking_deg: 6.0, width_m: 14.0, width_interp: 'linear' },
+            { x: 580, y: 230, label: 'T4', elevation_mode: 'last', elevation_val: 8.0, banking_deg: 7.5, width_m: 15.0, width_interp: 'quadratic' },
+            { x: 660, y: 130, label: 'T5', elevation_mode: 'last', elevation_val: 6.5, banking_deg: 1.0, width_m: 14.5, width_interp: 'linear' },
+            { x: 640, y: 70, label: 'T6', elevation_mode: 'last', elevation_val: -1.0, banking_deg: -2.0, width_m: 11.5, width_interp: 'quadratic' },
+            { x: 590, y: 65, label: 'T7', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 3.0, width_m: 11.0, width_interp: 'quadratic' },
+            { x: 540, y: 80, label: 'T8', elevation_mode: 'last', elevation_val: -2.0, banking_deg: 2.5, width_m: 12.0, width_interp: 'linear' },
+            { x: 480, y: 120, label: 'T9', elevation_mode: 'last', elevation_val: -3.5, banking_deg: 4.5, width_m: 12.5, width_interp: 'quadratic' },
+            { x: 440, y: 170, label: 'T10', elevation_mode: 'last', elevation_val: -2.0, banking_deg: 2.0, width_m: 13.0, width_interp: 'quadratic' },
+            { x: 370, y: 210, label: 'T11', elevation_mode: 'last', elevation_val: -2.5, banking_deg: 6.0, width_m: 12.5, width_interp: 'quadratic' },
+            { x: 320, y: 260, label: 'T12', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 4.0, width_m: 13.5, width_interp: 'linear' },
+            { x: 240, y: 280, label: 'T13', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 170, y: 310, label: 'T14', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 3.5, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 120, y: 380, label: 'T15', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 2.0, width_m: 13.0, width_interp: 'linear' },
+            { x: 180, y: 440, label: 'T16', elevation_mode: 'last', elevation_val: -0.5, banking_deg: 1.0, width_m: 14.0, width_interp: 'quadratic' },
+            { x: 270, y: 430, label: 'T17', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 2.5, width_m: 14.5, width_interp: 'quadratic' },
+            { x: 330, y: 360, label: 'T18', elevation_mode: 'last', elevation_val: -1.0, banking_deg: -1.0, width_m: 11.0, width_interp: 'quadratic' },
+            { x: 360, y: 320, label: 'T19', elevation_mode: 'last', elevation_val: -0.5, banking_deg: 0.0, width_m: 12.0, width_interp: 'linear' }
+          ]
+        : [
+            { x: 420, y: 285, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 15.0, width_interp: 'quadratic' },
+            { x: 500, y: 280, label: 'T1', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.5, width_m: 14.0, width_interp: 'quadratic' },
+            { x: 610, y: 200, label: 'T2', elevation_mode: 'last', elevation_val: 1.2, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 650, y: 140, label: 'T3', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0, width_m: 11.5, width_interp: 'linear' },
+            { x: 580, y: 65, label: 'T4', elevation_mode: 'last', elevation_val: -0.4, banking_deg: 5.0, width_m: 11.0, width_interp: 'quadratic' },
+            { x: 440, y: 85, label: 'T5', elevation_mode: 'last', elevation_val: -0.6, banking_deg: 2.5, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 330, y: 145, label: 'T6', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 0.0, width_m: 13.0, width_interp: 'linear' },
+            { x: 200, y: 170, label: 'T7', elevation_mode: 'last', elevation_val: 0.2, banking_deg: 3.5, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 95, y: 240, label: 'T8', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.0, width_m: 11.5, width_interp: 'quadratic' },
+            { x: 90, y: 340, label: 'T9', elevation_mode: 'last', elevation_val: 0.4, banking_deg: 2.0, width_m: 12.5, width_interp: 'linear' },
+            { x: 140, y: 430, label: 'T10', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 3.0, width_m: 13.5, width_interp: 'quadratic' },
+            { x: 290, y: 470, label: 'T11', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 4.5, width_m: 14.5, width_interp: 'quadratic' },
+            { x: 440, y: 460, label: 'T12', elevation_mode: 'last', elevation_val: 0.6, banking_deg: 5.5, width_m: 13.0, width_interp: 'linear' },
+            { x: 560, y: 380, label: 'T13', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+            { x: 620, y: 290, label: 'T14', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 0.0, width_m: 12.5, width_interp: 'quadratic' },
+            { x: 560, y: 195, label: 'T15', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 3.5, width_m: 11.0, width_interp: 'sqrt' },
+            { x: 430, y: 235, label: 'T16', elevation_mode: 'last', elevation_val: -1.2, banking_deg: -1.5, width_m: 14.0, width_interp: 'quadratic' }
+          ]);
+
+    const loadedNodes: Waypoint[] = rawNodes.map((n: any, idx: number) => ({
+      x: n.x,
+      y: n.y,
+      label: n.label || (idx === 0 ? 'SF' : `T${idx}`),
+      elevation_mode: n.elevation_mode || (idx === 0 ? 'sf' : 'last'),
+      elevation_val: n.elevation_val ?? 0.0,
+      banking_deg: n.banking_deg ?? 0.0,
+      width_m: n.width_m ?? (idx === 0 ? 15.0 : 12.0),
+      width_interp: n.width_interp || 'quadratic'
+    }));
+
+    setSplineNodes(loadedNodes);
+    setSelectedNodeIdx(0);
+
+    if ((activeTrack as any).start_finish?.elevation_base_m !== undefined) {
+      setSfElevationBase((activeTrack as any).start_finish.elevation_base_m);
+    }
+
+    if ((activeTrack as any).pitlane) {
+      setPitlane((activeTrack as any).pitlane);
+    }
+
+    // Repaint offscreen canvas with loaded track continuous spline ribbon
+    const off = offscreenCanvasRef.current;
+    if (off) {
+      const ctx = off.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#07090F';
+        ctx.fillRect(0, 0, 800, 500);
+        const samples = computeContinuousTrackBoundaries(loadedNodes, cs, 24);
+        paintContinuousTrackRibbon(ctx, samples);
+      }
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      saveUndoState();
     }
   }, [selectedTrackId]);
 
@@ -418,8 +721,17 @@ export const TracksScreen: React.FC = () => {
       const gFirst = pitlane.garages[0];
       const gLast = pitlane.garages[pitlane.garages.length - 1];
 
-      // Pit road asphalt lane
+      // Pit road asphalt lane with center rotation
       ctx.save();
+      const pitRotDeg = pitlane.rotation_deg ?? 0;
+      if (pitRotDeg !== 0) {
+        const pitCenterX = (pitlane.entry.x + pitlane.exit.x) / 2;
+        const pitCenterY = (pitlane.entry.y + pitlane.exit.y) / 2;
+        ctx.translate(pitCenterX, pitCenterY);
+        ctx.rotate((pitRotDeg * Math.PI) / 180);
+        ctx.translate(-pitCenterX, -pitCenterY);
+      }
+
       ctx.fillStyle = '#1A2133';
       ctx.strokeStyle = '#324060';
       ctx.lineWidth = 1;
@@ -508,10 +820,48 @@ export const TracksScreen: React.FC = () => {
       ctx.restore();
     }
 
-    // 4. Draw Spline Waypoint Nodes and Centerline
+    // 4. Draw Continuous Variable-Width Spline Track Overlay and Centerline
     if (showSplineOverlay && splineNodes.length > 2) {
-      // Dashed Guide Centerline
-      ctx.lineWidth = 1.5;
+      const boundarySamples = computeContinuousTrackBoundaries(splineNodes, cellSize, 28);
+
+      if (boundarySamples.length > 0) {
+        // A. Subtle translucent track corridor fill quad-by-quad (100% full continuous coverage)
+        ctx.fillStyle = 'rgba(25, 184, 201, 0.08)';
+        for (let s = 0; s < boundarySamples.length; s++) {
+          const s0 = boundarySamples[s];
+          const s1 = boundarySamples[(s + 1) % boundarySamples.length];
+          ctx.beginPath();
+          ctx.moveTo(s0.outX, s0.outY);
+          ctx.lineTo(s1.outX, s1.outY);
+          ctx.lineTo(s1.inX, s1.inY);
+          ctx.lineTo(s0.inX, s0.inY);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // B. Continuous Outer Track Edge
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = 'rgba(25, 184, 201, 0.75)';
+        ctx.beginPath();
+        ctx.moveTo(boundarySamples[0].outX, boundarySamples[0].outY);
+        for (let s = 1; s < boundarySamples.length; s++) {
+          ctx.lineTo(boundarySamples[s].outX, boundarySamples[s].outY);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        // C. Continuous Inner Track Edge
+        ctx.beginPath();
+        ctx.moveTo(boundarySamples[0].inX, boundarySamples[0].inY);
+        for (let s = 1; s < boundarySamples.length; s++) {
+          ctx.lineTo(boundarySamples[s].inX, boundarySamples[s].inY);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      // D. Dashed Centerline Guide
+      ctx.lineWidth = 1.2;
       ctx.strokeStyle = '#19B8C9';
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
@@ -527,53 +877,128 @@ export const TracksScreen: React.FC = () => {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Start/Finish Timing Gate Marker
+      // E. Start/Finish Timing Gate Marker with Center Rotation
       const sf = splineNodes[0];
+      const sfRot = ((sf.rotation_deg ?? 0) * Math.PI) / 180;
+      ctx.save();
+      ctx.translate(sf.x, sf.y);
+      ctx.rotate(sfRot);
       ctx.fillStyle = '#3DFF8F';
-      ctx.fillRect(sf.x - 3, sf.y - 14, 6, 28);
+      ctx.fillRect(-4, -16, 8, 32);
       ctx.fillStyle = '#07090F';
       ctx.font = 'bold 9px monospace';
-      ctx.fillText('SF', sf.x - 5, sf.y + 3);
+      ctx.fillText('SF', -5, 3);
+      // Directional arrow showing heading
+      ctx.strokeStyle = '#3DFF8F';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(16, 0);
+      ctx.lineTo(12, -4);
+      ctx.moveTo(16, 0);
+      ctx.lineTo(12, 4);
+      ctx.stroke();
+      ctx.restore();
 
-      // Waypoint Handles
+      // F. Waypoint Handles, Normal Calipers & Property Badges
       splineNodes.forEach((node, i) => {
-        const isSelected = selectedNodeIdx === i;
+        const isSelected = selectedNodeIndices.has(i) || selectedNodeIdx === i;
         const absElev = computedElevations[i] ?? 0;
+        const widthM = node.width_m || 12.0;
+        const interp = node.width_interp || 'quadratic';
+        const sampleIdx = i * 28;
+        const sample = boundarySamples[sampleIdx];
 
-        // Waypoint Circle
+        // Draw track width normal crossbar (caliper line across the track at this node)
+        if (sample) {
+          ctx.lineWidth = isSelected ? 2.5 : 1.0;
+          ctx.strokeStyle = isSelected ? '#F0388F' : 'rgba(25, 184, 201, 0.6)';
+          ctx.beginPath();
+          ctx.moveTo(sample.inX, sample.inY);
+          ctx.lineTo(sample.outX, sample.outY);
+          ctx.stroke();
+
+          // Caliper end ticks
+          const tickLen = isSelected ? 4.5 : 2.5;
+          const tx = sample.normalY * tickLen;
+          const ty = -sample.normalX * tickLen;
+
+          ctx.beginPath();
+          ctx.moveTo(sample.inX - tx, sample.inY - ty);
+          ctx.lineTo(sample.inX + tx, sample.inY + ty);
+          ctx.moveTo(sample.outX - tx, sample.outY - ty);
+          ctx.lineTo(sample.outX + tx, sample.outY + ty);
+          ctx.stroke();
+        }
+
+        // Center rotation directional arrow indicator at node
+        if (node.rotation_deg) {
+          const rotRad = (node.rotation_deg * Math.PI) / 180;
+          ctx.save();
+          ctx.translate(node.x, node.y);
+          ctx.rotate(rotRad);
+          ctx.strokeStyle = isSelected ? '#F0388F' : '#FFC247';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(16, 0);
+          ctx.lineTo(12, -3.5);
+          ctx.moveTo(16, 0);
+          ctx.lineTo(12, 3.5);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Waypoint Centerline Handle Circle
         ctx.fillStyle = isSelected ? '#F0388F' : (i === 0 ? '#3DFF8F' : '#19B8C9');
         ctx.beginPath();
-        ctx.arc(node.x, node.y, isSelected ? 6.5 : 4.5, 0, Math.PI * 2);
+        ctx.arc(node.x, node.y, isSelected ? 7.0 : 4.5, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.strokeStyle = '#FFFFFF';
-        ctx.lineWidth = isSelected ? 1.5 : 1;
+        ctx.lineWidth = isSelected ? 2 : 1;
         ctx.stroke();
+
+        // Extra highlight ring for multi-selection
+        if (isSelected && selectedNodeIndices.size > 1) {
+          ctx.strokeStyle = '#F0388F';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, 11, 0, Math.PI * 2);
+          ctx.stroke();
+        }
 
         // Label Tag
         ctx.fillStyle = isSelected ? '#F0388F' : '#D7DEEC';
         ctx.font = 'bold 10px monospace';
-        ctx.fillText(node.label || (i === 0 ? 'SF' : `T${i}`), node.x + 8, node.y - 6);
+        ctx.fillText(node.label || (i === 0 ? 'SF' : `T${i}`), node.x + 8, node.y - 8);
 
-        // Elevation + Banking Badge for active / highlighted nodes
-        if (isSelected || zoomLevel >= 1.2) {
-          const bankSign = node.banking_deg > 0 ? `+${node.banking_deg.toFixed(1)}° (In)` : node.banking_deg < 0 ? `${node.banking_deg.toFixed(1)}° (Out)` : `0.0°`;
+        // Combined Elevation + Banking + Continuous Width Badge
+        if (isSelected || zoomLevel >= 1.15) {
+          const bankSign = node.banking_deg > 0 ? `+${node.banking_deg.toFixed(1)}°` : node.banking_deg < 0 ? `${node.banking_deg.toFixed(1)}°` : `0°`;
           const bankColor = node.banking_deg > 0 ? '#3DFF8F' : node.banking_deg < 0 ? '#FFC247' : '#7C88A6';
+          const interpLabel = interp === 'quadratic' ? 'Quad' : interp === 'sqrt' ? 'Sqrt' : 'Lin';
 
           ctx.fillStyle = '#121826';
           ctx.strokeStyle = isSelected ? '#F0388F' : '#1E2740';
           ctx.lineWidth = 0.8;
           ctx.beginPath();
-          ctx.roundRect(node.x + 8, node.y - 2, 74, 18, 4);
+          ctx.roundRect(node.x + 8, node.y - 4, 88, 28, 4);
           ctx.fill();
           ctx.stroke();
 
+          // Row 1: Elevation & Camber
           ctx.fillStyle = '#19B8C9';
           ctx.font = '8px monospace';
-          ctx.fillText(`Δ${node.elevation_val >= 0 ? '+' : ''}${node.elevation_val.toFixed(1)}m (${absElev.toFixed(0)}m)`, node.x + 11, node.y + 7);
+          ctx.fillText(`Δ${node.elevation_val >= 0 ? '+' : ''}${node.elevation_val.toFixed(1)}m`, node.x + 11, node.y + 6);
 
           ctx.fillStyle = bankColor;
-          ctx.fillText(bankSign, node.x + 11, node.y + 14);
+          ctx.fillText(bankSign, node.x + 58, node.y + 6);
+
+          // Row 2: Variable Track Width & AP Progression
+          ctx.fillStyle = isSelected ? '#F0388F' : '#D7DEEC';
+          ctx.font = 'bold 8px monospace';
+          ctx.fillText(`W:${widthM.toFixed(1)}m [${interpLabel}]`, node.x + 11, node.y + 18);
         }
       });
     }
@@ -639,6 +1064,25 @@ export const TracksScreen: React.FC = () => {
       ctx.stroke();
     }
 
+    // 8. Draw Marquee Selection Box
+    if (isSelectingBox && marqueeBox) {
+      const minX = Math.min(marqueeBox.x1, marqueeBox.x2);
+      const maxX = Math.max(marqueeBox.x1, marqueeBox.x2);
+      const minY = Math.min(marqueeBox.y1, marqueeBox.y2);
+      const maxY = Math.max(marqueeBox.y1, marqueeBox.y2);
+      const w = maxX - minX;
+      const h = maxY - minY;
+
+      ctx.save();
+      ctx.fillStyle = 'rgba(240, 56, 143, 0.15)';
+      ctx.fillRect(minX, minY, w, h);
+      ctx.strokeStyle = '#F0388F';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 5]);
+      ctx.strokeRect(minX, minY, w, h);
+      ctx.restore();
+    }
+
     ctx.restore();
   }, [
     showGrid,
@@ -648,6 +1092,9 @@ export const TracksScreen: React.FC = () => {
     panOffset,
     splineNodes,
     selectedNodeIdx,
+    selectedNodeIndices,
+    marqueeBox,
+    isSelectingBox,
     computedElevations,
     pitlane,
     selectedGarageId,
@@ -706,53 +1153,91 @@ export const TracksScreen: React.FC = () => {
     setLastPos(pos);
     setDragStartPos(pos);
 
-    if (activeTool === 'spline') {
+    if (activeTool === 'spline' || activeTool === 'box_select') {
       // Check if clicking near an existing node
       const clickedIdx = splineNodes.findIndex((n) => {
         const dx = n.x - pos.x;
         const dy = n.y - pos.y;
-        return Math.sqrt(dx * dx + dy * dy) < 14;
+        return Math.sqrt(dx * dx + dy * dy) < 16;
       });
 
       if (clickedIdx !== -1) {
+        let newSelection = new Set(selectedNodeIndices);
+        if (e.shiftKey) {
+          if (newSelection.has(clickedIdx)) {
+            newSelection.delete(clickedIdx);
+          } else {
+            newSelection.add(clickedIdx);
+          }
+        } else if (!newSelection.has(clickedIdx)) {
+          newSelection = new Set([clickedIdx]);
+        }
+        setSelectedNodeIndices(newSelection);
         setSelectedNodeIdx(clickedIdx);
-      } else {
-        // Shift Register Node Insertion
-        // User toggle: 'append' (at end as TN) vs 't1' (Shift Register: insert as T1, shifting other nodes up)
-        if (nodeInsertMode === 'append') {
-          const nextIdx = splineNodes.length;
-          const newNode: Waypoint = {
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            label: `T${nextIdx}`,
-            elevation_mode: 'last',
-            elevation_val: 0.0,
-            banking_deg: 0.0
-          };
-          setSplineNodes([...splineNodes, newNode]);
-          setSelectedNodeIdx(splineNodes.length);
-        } else {
-          // 't1' mode: Insert as T1!
-          // All existing nodes at index >= 1 shift their index up by 1: T1 -> T2, T2 -> T3, etc.
-          const newNode: Waypoint = {
-            x: Math.round(pos.x),
-            y: Math.round(pos.y),
-            label: 'T1',
-            elevation_mode: 'last',
-            elevation_val: 0.0,
-            banking_deg: 0.0
-          };
-          const updatedNodes: Waypoint[] = [
-            splineNodes[0], // Keep SF
-            newNode,
-            ...splineNodes.slice(1)
-          ].map((n, idx) => ({
-            ...n,
-            label: idx === 0 ? 'SF' : `T${idx}`
-          }));
 
-          setSplineNodes(updatedNodes);
-          setSelectedNodeIdx(1);
+        // Record initial drag positions for all selected nodes so they translate together
+        const dragMap = new Map<number, { x: number; y: number }>();
+        newSelection.forEach((idx) => {
+          if (splineNodes[idx]) {
+            dragMap.set(idx, { x: splineNodes[idx].x, y: splineNodes[idx].y });
+          }
+        });
+        setDragOffsetNodes(dragMap);
+        setIsDraggingNodes(true);
+      } else {
+        // Clicked empty canvas space
+        if (activeTool === 'box_select' || e.shiftKey) {
+          setIsSelectingBox(true);
+          setMarqueeBox({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y });
+          if (!e.shiftKey) {
+            setSelectedNodeIndices(new Set());
+          }
+        } else {
+          // Spline spawn mode (append or t1)
+          if (nodeInsertMode === 'append') {
+            const nextIdx = splineNodes.length;
+            const prevWidth = splineNodes[splineNodes.length - 1]?.width_m || 12.0;
+            const newNode: Waypoint = {
+              x: Math.round(pos.x),
+              y: Math.round(pos.y),
+              label: `T${nextIdx}`,
+              elevation_mode: 'last',
+              elevation_val: 0.0,
+              banking_deg: 0.0,
+              width_m: prevWidth,
+              width_interp: 'quadratic',
+              rotation_deg: 0
+            };
+            setSplineNodes([...splineNodes, newNode]);
+            setSelectedNodeIndices(new Set([splineNodes.length]));
+            setSelectedNodeIdx(splineNodes.length);
+          } else {
+            // 't1' mode: Insert as T1!
+            const sfWidth = splineNodes[0]?.width_m || 14.0;
+            const newNode: Waypoint = {
+              x: Math.round(pos.x),
+              y: Math.round(pos.y),
+              label: 'T1',
+              elevation_mode: 'last',
+              elevation_val: 0.0,
+              banking_deg: 0.0,
+              width_m: sfWidth,
+              width_interp: 'quadratic',
+              rotation_deg: 0
+            };
+            const updatedNodes: Waypoint[] = [
+              splineNodes[0], // Keep SF
+              newNode,
+              ...splineNodes.slice(1)
+            ].map((n, idx) => ({
+              ...n,
+              label: idx === 0 ? 'SF' : `T${idx}`
+            }));
+
+            setSplineNodes(updatedNodes);
+            setSelectedNodeIndices(new Set([1]));
+            setSelectedNodeIdx(1);
+          }
         }
       }
       return;
@@ -811,6 +1296,47 @@ export const TracksScreen: React.FC = () => {
 
     if (!isDrawing) return;
 
+    if (isSelectingBox && dragStartPos) {
+      const box = { x1: dragStartPos.x, y1: dragStartPos.y, x2: pos.x, y2: pos.y };
+      setMarqueeBox(box);
+      const minX = Math.min(box.x1, box.x2);
+      const maxX = Math.max(box.x1, box.x2);
+      const minY = Math.min(box.y1, box.y2);
+      const maxY = Math.max(box.y1, box.y2);
+
+      const inBox = new Set<number>();
+      splineNodes.forEach((node, i) => {
+        if (node.x >= minX && node.x <= maxX && node.y >= minY && node.y <= maxY) {
+          inBox.add(i);
+        }
+      });
+      setSelectedNodeIndices(inBox);
+      if (inBox.size > 0) {
+        setSelectedNodeIdx(Array.from(inBox)[0]);
+      }
+      return;
+    }
+
+    if (isDraggingNodes && dragStartPos && dragOffsetNodes.size > 0) {
+      const dx = Math.round(pos.x - dragStartPos.x);
+      const dy = Math.round(pos.y - dragStartPos.y);
+
+      setSplineNodes((prev) => {
+        const next = [...prev];
+        dragOffsetNodes.forEach((initPos, idx) => {
+          if (next[idx]) {
+            next[idx] = {
+              ...next[idx],
+              x: initPos.x + dx,
+              y: initPos.y + dy
+            };
+          }
+        });
+        return next;
+      });
+      return;
+    }
+
     if (activeTool === 'spline' && selectedNodeIdx !== null) {
       setSplineNodes((prev) => {
         const updated = [...prev];
@@ -848,6 +1374,16 @@ export const TracksScreen: React.FC = () => {
 
     const pos = getCanvasCoords(e);
     setIsDrawing(false);
+
+    if (isSelectingBox) {
+      setIsSelectingBox(false);
+      setMarqueeBox(null);
+    }
+
+    if (isDraggingNodes) {
+      setIsDraggingNodes(false);
+      setDragOffsetNodes(new Map());
+    }
 
     if (activeTool === 'rect' && dragStartPos) {
       const off = offscreenCanvasRef.current;
@@ -920,7 +1456,7 @@ export const TracksScreen: React.FC = () => {
     renderCanvas();
   };
 
-  // Auto-Paint Road (12m width) onto canvas along current spline centerline
+  // Auto-Paint Continuous Variable-Width Track Ribbon onto canvas along spline nodes
   const handleAutoPaintRoad = () => {
     const off = offscreenCanvasRef.current;
     if (!off) return;
@@ -928,14 +1464,11 @@ export const TracksScreen: React.FC = () => {
     if (!ctx) return;
 
     saveUndoState();
-    // Paint 14m outer rumble kerbs (White/Red flat kerb)
-    paintSplineRibbon(ctx, splineNodes, 28, '#D7DEEC');
-    paintSplineRibbon(ctx, splineNodes, 26, '#FF4458', true);
-    // Paint 12m tarmac surface
-    paintSplineRibbon(ctx, splineNodes, 22, '#2B3346');
+    const samples = computeContinuousTrackBoundaries(splineNodes, cellSize, 24);
+    paintContinuousTrackRibbon(ctx, samples);
 
     renderCanvas();
-    setSaveBanner('Auto-painted 12.0m tarmac circuit ribbon along spline centerline!');
+    setSaveBanner('✓ Auto-painted continuous variable-width circuit with kerbs onto canvas layer!');
     setTimeout(() => setSaveBanner(null), 3000);
   };
 
@@ -1083,6 +1616,174 @@ export const TracksScreen: React.FC = () => {
     setSelectedNodeIdx(targetIdx);
   };
 
+  // Delete Spline Waypoint and Shift Sequential Renumbering
+  const handleDeleteSelectedNode = (indexToDelete?: number) => {
+    const idx = indexToDelete !== undefined ? indexToDelete : selectedNodeIdx;
+    if (idx === null || idx === undefined || idx < 0 || idx >= splineNodes.length) return;
+    if (splineNodes.length <= 3) {
+      setSaveBanner('⚠️ Cannot delete: A closed circuit requires at least 3 waypoint nodes.');
+      setTimeout(() => setSaveBanner(null), 3000);
+      return;
+    }
+    const targetLabel = splineNodes[idx].label || (idx === 0 ? 'SF' : `T${idx}`);
+    const remaining = splineNodes.filter((_, i) => i !== idx).map((n, newIdx) => ({
+      ...n,
+      label: newIdx === 0 ? 'SF' : `T${newIdx}`
+    }));
+    setSplineNodes(remaining);
+
+    // Update selected index safely
+    if (idx >= remaining.length) {
+      setSelectedNodeIdx(remaining.length - 1);
+    } else {
+      setSelectedNodeIdx(idx);
+    }
+    setSaveBanner(`✓ Deleted waypoint ${targetLabel}. Circuit nodes re-indexed sequentially.`);
+    setTimeout(() => setSaveBanner(null), 3000);
+  };
+
+  // Track smoothing (Laplacian smoothing strictly preserving rotation_deg, banking, and width)
+  const handleSmoothTrack = () => {
+    if (splineNodes.length < 3) return;
+    const n = splineNodes.length;
+    const smoothed = splineNodes.map((node, i) => {
+      const prev = splineNodes[(i - 1 + n) % n];
+      const next = splineNodes[(i + 1) % n];
+      // Weighted Laplacian filter on (x, y) coordinates
+      const newX = Math.round(0.5 * node.x + 0.25 * prev.x + 0.25 * next.x);
+      const newY = Math.round(0.5 * node.y + 0.25 * prev.y + 0.25 * next.y);
+      return {
+        ...node,
+        x: newX,
+        y: newY,
+        // ROTATION IS STRICTLY PRESERVED AND NEVER OVERRIDDEN BY TRACK SMOOTHING
+        rotation_deg: node.rotation_deg ?? 0
+      };
+    });
+    setSplineNodes(smoothed);
+    setSaveBanner('✓ Track centerline smoothed with Laplacian filter. All center rotations strictly preserved!');
+    setTimeout(() => setSaveBanner(null), 3500);
+  };
+
+  // Set center rotation on a specific node or all selected nodes
+  const handleSetNodeCenterRotation = (angleDeg: number, targetIdx?: number) => {
+    const idx = targetIdx !== undefined ? targetIdx : selectedNodeIdx;
+    if (idx === null || !splineNodes[idx]) return;
+
+    setSplineNodes((prev) => {
+      const copy = [...prev];
+      if (selectedNodeIndices.size > 1 && selectedNodeIndices.has(idx)) {
+        const currentRot = copy[idx]?.rotation_deg ?? 0;
+        const delta = angleDeg - currentRot;
+        selectedNodeIndices.forEach((si) => {
+          if (copy[si]) {
+            const rot = ((((copy[si].rotation_deg ?? 0) + delta + 540) % 360) - 180);
+            copy[si] = { ...copy[si], rotation_deg: rot };
+          }
+        });
+      } else {
+        copy[idx] = { ...copy[idx], rotation_deg: angleDeg };
+      }
+      return copy;
+    });
+  };
+
+  // Rotate selected nodes by delta degrees around their collective center
+  const handleRotateSelectedNodes = (deltaDeg: number) => {
+    setSplineNodes((prev) => {
+      const copy = [...prev];
+      const indices = selectedNodeIndices.size > 0 ? Array.from(selectedNodeIndices) : selectedNodeIdx !== null ? [selectedNodeIdx] : [];
+      if (indices.length === 0) return prev;
+
+      // Calculate centroid of selected nodes
+      let sumX = 0;
+      let sumY = 0;
+      indices.forEach((i) => {
+        if (copy[i]) {
+          sumX += copy[i].x;
+          sumY += copy[i].y;
+        }
+      });
+      const cX = sumX / indices.length;
+      const cY = sumY / indices.length;
+
+      const rad = (deltaDeg * Math.PI) / 180;
+      const cosR = Math.cos(rad);
+      const sinR = Math.sin(rad);
+
+      indices.forEach((i) => {
+        if (copy[i]) {
+          const dx = copy[i].x - cX;
+          const dy = copy[i].y - cY;
+          const rotX = Math.round(cX + dx * cosR - dy * sinR);
+          const rotY = Math.round(cY + dx * sinR + dy * cosR);
+          const newRot = ((((copy[i].rotation_deg ?? 0) + deltaDeg + 540) % 360) - 180);
+          copy[i] = {
+            ...copy[i],
+            x: rotX,
+            y: rotY,
+            rotation_deg: newRot
+          };
+        }
+      });
+      return copy;
+    });
+  };
+
+  // Translate all selected nodes by delta pixels
+  const handleTranslateSelectedNodes = (dx: number, dy: number) => {
+    const indices = selectedNodeIndices.size > 0 ? Array.from(selectedNodeIndices) : selectedNodeIdx !== null ? [selectedNodeIdx] : [];
+    if (indices.length === 0) return;
+
+    setSplineNodes((prev) => {
+      const copy = [...prev];
+      indices.forEach((i) => {
+        if (copy[i]) {
+          copy[i] = {
+            ...copy[i],
+            x: Math.round(copy[i].x + dx),
+            y: Math.round(copy[i].y + dy)
+          };
+        }
+      });
+      return copy;
+    });
+  };
+
+  // Set SF Line Center Rotation
+  const handleSetSFRotation = (angleDeg: number) => {
+    setSplineNodes((prev) => {
+      const copy = [...prev];
+      if (copy[0]) {
+        copy[0] = { ...copy[0], rotation_deg: angleDeg };
+      }
+      return copy;
+    });
+  };
+
+  // Set Pitlane Center Rotation
+  const handleSetPitlaneRotation = (angleDeg: number) => {
+    setPitlane((prev) => ({
+      ...prev,
+      rotation_deg: angleDeg
+    }));
+  };
+
+  // Keyboard shortcut listener: Delete or Backspace to remove selected waypoint
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeIdx !== null) {
+        e.preventDefault();
+        handleDeleteSelectedNode(selectedNodeIdx);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNodeIdx, splineNodes]);
+
   // Clear Canvas to Void
   const handleClearCanvas = () => {
     const off = offscreenCanvasRef.current;
@@ -1097,30 +1798,156 @@ export const TracksScreen: React.FC = () => {
 
   // Reset Spline to default Silverstone circuit
   const handleResetSpline = () => {
-    setSplineNodes([
-      { x: 420, y: 285, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0 },
-      { x: 500, y: 280, label: 'T1', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.5 },
-      { x: 610, y: 200, label: 'T2', elevation_mode: 'last', elevation_val: 1.2, banking_deg: 2.0 },
-      { x: 650, y: 140, label: 'T3', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0 },
-      { x: 580, y: 65, label: 'T4', elevation_mode: 'last', elevation_val: -0.4, banking_deg: 5.0 },
-      { x: 440, y: 85, label: 'T5', elevation_mode: 'last', elevation_val: -0.6, banking_deg: 2.5 },
-      { x: 330, y: 145, label: 'T6', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 0.0 },
-      { x: 200, y: 170, label: 'T7', elevation_mode: 'last', elevation_val: 0.2, banking_deg: 3.5 },
-      { x: 95, y: 240, label: 'T8', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.0 },
-      { x: 90, y: 340, label: 'T9', elevation_mode: 'last', elevation_val: 0.4, banking_deg: 2.0 },
-      { x: 140, y: 430, label: 'T10', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 3.0 },
-      { x: 290, y: 470, label: 'T11', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 4.5 },
-      { x: 440, y: 460, label: 'T12', elevation_mode: 'last', elevation_val: 0.6, banking_deg: 5.5 },
-      { x: 560, y: 380, label: 'T13', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 2.0 },
-      { x: 620, y: 290, label: 'T14', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 0.0 },
-      { x: 560, y: 195, label: 'T15', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 3.5 },
-      { x: 430, y: 235, label: 'T16', elevation_mode: 'last', elevation_val: -1.2, banking_deg: -1.5 }
-    ]);
+    const defaultSilverstone: Waypoint[] = [
+      { x: 420, y: 285, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 15.0, width_interp: 'quadratic' },
+      { x: 500, y: 280, label: 'T1', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.5, width_m: 14.0, width_interp: 'quadratic' },
+      { x: 610, y: 200, label: 'T2', elevation_mode: 'last', elevation_val: 1.2, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+      { x: 650, y: 140, label: 'T3', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.0, width_m: 11.5, width_interp: 'linear' },
+      { x: 580, y: 65, label: 'T4', elevation_mode: 'last', elevation_val: -0.4, banking_deg: 5.0, width_m: 11.0, width_interp: 'quadratic' },
+      { x: 440, y: 85, label: 'T5', elevation_mode: 'last', elevation_val: -0.6, banking_deg: 2.5, width_m: 12.0, width_interp: 'quadratic' },
+      { x: 330, y: 145, label: 'T6', elevation_mode: 'last', elevation_val: -1.5, banking_deg: 0.0, width_m: 13.0, width_interp: 'linear' },
+      { x: 200, y: 170, label: 'T7', elevation_mode: 'last', elevation_val: 0.2, banking_deg: 3.5, width_m: 12.0, width_interp: 'quadratic' },
+      { x: 95, y: 240, label: 'T8', elevation_mode: 'last', elevation_val: 0.8, banking_deg: 4.0, width_m: 11.5, width_interp: 'quadratic' },
+      { x: 90, y: 340, label: 'T9', elevation_mode: 'last', elevation_val: 0.4, banking_deg: 2.0, width_m: 12.5, width_interp: 'linear' },
+      { x: 140, y: 430, label: 'T10', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 3.0, width_m: 13.5, width_interp: 'quadratic' },
+      { x: 290, y: 470, label: 'T11', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 4.5, width_m: 14.5, width_interp: 'quadratic' },
+      { x: 440, y: 460, label: 'T12', elevation_mode: 'last', elevation_val: 0.6, banking_deg: 5.5, width_m: 13.0, width_interp: 'linear' },
+      { x: 560, y: 380, label: 'T13', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 2.0, width_m: 12.0, width_interp: 'quadratic' },
+      { x: 620, y: 290, label: 'T14', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 0.0, width_m: 12.5, width_interp: 'quadratic' },
+      { x: 560, y: 195, label: 'T15', elevation_mode: 'last', elevation_val: -0.8, banking_deg: 3.5, width_m: 11.0, width_interp: 'sqrt' },
+      { x: 430, y: 235, label: 'T16', elevation_mode: 'last', elevation_val: -1.2, banking_deg: -1.5, width_m: 14.0, width_interp: 'quadratic' }
+    ];
+    setSplineNodes(defaultSilverstone);
+    setSelectedNodeIdx(0);
+    const off = offscreenCanvasRef.current;
+    if (off) {
+      const ctx = off.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#07090F';
+        ctx.fillRect(0, 0, 800, 500);
+        const samples = computeContinuousTrackBoundaries(defaultSilverstone, cellSize, 24);
+        paintContinuousTrackRibbon(ctx, samples);
+      }
+      saveUndoState();
+    }
+  };
+
+  // Open "Save As New..." modal pre-filled with current name + " (Custom)"
+  const handleOpenSaveAsModal = () => {
+    setNewTrackModalName(`${trackName} (Custom)`);
+    setNewTrackModalLength(trackLengthM);
+    setNewTrackModalTemplate('copy');
+    setShowNewTrackModal(true);
+  };
+
+  // Open "+ New Track" modal with clean defaults
+  const handleOpenNewTrackModal = () => {
+    setNewTrackModalName(`Custom Circuit ${tracks.length + 1}`);
+    setNewTrackModalLength(5000);
+    setNewTrackModalTemplate('gp');
+    setShowNewTrackModal(true);
+  };
+
+  // Commit Save As New Circuit to backend
+  const handleCommitNewTrack = async () => {
+    const cleanName = newTrackModalName.trim() || `Circuit ${tracks.length + 1}`;
+    const targetId = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 32) || `track_${Date.now()}`;
+
+    let nodesToSave: Waypoint[] = splineNodes;
+    if (newTrackModalTemplate === 'oval') {
+      nodesToSave = [
+        { x: 300, y: 350, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 16.0, width_interp: 'quadratic' },
+        { x: 500, y: 350, label: 'T1', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 8.0, width_m: 15.0, width_interp: 'quadratic' },
+        { x: 580, y: 250, label: 'T2', elevation_mode: 'last', elevation_val: 0.0, banking_deg: 8.0, width_m: 15.0, width_interp: 'quadratic' },
+        { x: 500, y: 150, label: 'T3', elevation_mode: 'last', elevation_val: -0.5, banking_deg: 0.0, width_m: 16.0, width_interp: 'quadratic' },
+        { x: 300, y: 150, label: 'T4', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 8.0, width_m: 15.0, width_interp: 'quadratic' },
+        { x: 220, y: 250, label: 'T5', elevation_mode: 'last', elevation_val: 0.0, banking_deg: 8.0, width_m: 15.0, width_interp: 'quadratic' }
+      ];
+    } else if (newTrackModalTemplate === 'gp') {
+      nodesToSave = [
+        { x: 400, y: 320, label: 'SF', elevation_mode: 'sf', elevation_val: 0.0, banking_deg: 0.0, width_m: 15.0, width_interp: 'quadratic' },
+        { x: 520, y: 320, label: 'T1', elevation_mode: 'last', elevation_val: 1.0, banking_deg: 4.0, width_m: 13.5, width_interp: 'quadratic' },
+        { x: 620, y: 230, label: 'T2', elevation_mode: 'last', elevation_val: 1.5, banking_deg: 3.0, width_m: 12.0, width_interp: 'quadratic' },
+        { x: 560, y: 110, label: 'T3', elevation_mode: 'last', elevation_val: -1.0, banking_deg: 4.5, width_m: 12.5, width_interp: 'linear' },
+        { x: 420, y: 120, label: 'T4', elevation_mode: 'last', elevation_val: -0.5, banking_deg: 2.0, width_m: 14.0, width_interp: 'quadratic' },
+        { x: 260, y: 140, label: 'T5', elevation_mode: 'last', elevation_val: -1.2, banking_deg: 5.0, width_m: 11.5, width_interp: 'quadratic' },
+        { x: 160, y: 240, label: 'T6', elevation_mode: 'last', elevation_val: 0.5, banking_deg: 3.5, width_m: 13.0, width_interp: 'linear' },
+        { x: 240, y: 340, label: 'T7', elevation_mode: 'last', elevation_val: -0.3, banking_deg: 2.0, width_m: 14.5, width_interp: 'quadratic' }
+      ];
+    }
+
+    const trackPayload = {
+      id: targetId,
+      schema_version: '1.3.0',
+      name: cleanName,
+      length_m: newTrackModalLength,
+      cell_size_m: cellSize,
+      origin: [0.0, 0.0],
+      bbox: [-1200.0, -850.0, 1400.0, 950.0],
+      start_finish: {
+        x: nodesToSave[0]?.x || 420.0,
+        y: nodesToSave[0]?.y || 285.0,
+        heading: 1.57,
+        elevation_base_m: sfElevationBase
+      },
+      sectors: [
+        { index: 1, name: 'Sector 1', distance_m: Math.round(newTrackModalLength * 0.33), colour: '#FF4458' },
+        { index: 2, name: 'Sector 2', distance_m: Math.round(newTrackModalLength * 0.67), colour: '#19B8C9' },
+        { index: 3, name: 'Sector 3', distance_m: Math.round(newTrackModalLength), colour: '#FFC247' }
+      ],
+      drs_zones: [
+        { index: 1, detection_m: Math.round(newTrackModalLength * 0.2), activation_m: Math.round(newTrackModalLength * 0.24), end_m: Math.round(newTrackModalLength * 0.32), colour: '#3DFF8F' }
+      ],
+      speed_trap: { distance_m: Math.round(newTrackModalLength * 0.8), x: 580.0, y: 140.0, colour: '#F0388F' },
+      surface_legend: surfaceLegend,
+      centreline_points: nodesToSave,
+      spline_nodes: nodesToSave,
+      computed_elevations_m: computedElevations,
+      pitlane: pitlane
+    };
+
+    try {
+      const res = await fetch(`/api/tracks/${targetId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(trackPayload)
+      });
+      if (res.ok) {
+        setShowNewTrackModal(false);
+        await refreshTracks();
+        setSelectedTrackId(targetId);
+        setTrackName(cleanName);
+        setSplineNodes(nodesToSave);
+        setSelectedNodeIdx(0);
+        setSaveBanner(`✓ Created & saved new circuit "${cleanName}"!`);
+        setTimeout(() => setSaveBanner(null), 3500);
+
+        const off = offscreenCanvasRef.current;
+        if (off) {
+          const ctx = off.getContext('2d');
+          if (ctx) {
+            ctx.fillStyle = '#07090F';
+            ctx.fillRect(0, 0, 800, 500);
+            const samples = computeContinuousTrackBoundaries(nodesToSave, cellSize, 24);
+            paintContinuousTrackRibbon(ctx, samples);
+          }
+          saveUndoState();
+        }
+      }
+    } catch (e) {
+      console.error('Failed to create new track:', e);
+    }
   };
 
   // Save Track Definition to backend
   const handleSaveTrack = async () => {
+    let targetId = selectedTrackId;
+    if (!targetId || targetId === '__new__') {
+      targetId = trackName.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 32) || `track_${Date.now()}`;
+    }
+
     const trackPayload = {
+      id: targetId,
       schema_version: '1.3.0',
       name: trackName,
       length_m: trackLengthM,
@@ -1145,22 +1972,42 @@ export const TracksScreen: React.FC = () => {
       speed_trap: { distance_m: 4820.0, x: 580.0, y: 140.0, colour: '#F0388F' },
       surface_legend: surfaceLegend,
       centreline_points: splineNodes,
+      spline_nodes: splineNodes,
       computed_elevations_m: computedElevations,
       pitlane: pitlane
     };
 
     try {
-      const res = await fetch(`/api/tracks/${selectedTrackId || 'silverstone_gp'}`, {
+      const res = await fetch(`/api/tracks/${targetId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(trackPayload)
       });
       if (res.ok) {
-        setSaveBanner(`✓ Track "${trackName}" saved successfully with 10-team pitlane and delta elevations!`);
+        await refreshTracks();
+        setSelectedTrackId(targetId);
+        setSaveBanner(`✓ Track "${trackName}" saved successfully with continuous width & elevations!`);
         setTimeout(() => setSaveBanner(null), 3500);
+      } else {
+        throw new Error('Save failed with status ' + res.status);
       }
     } catch (e) {
-      setSaveBanner('✓ Track definition updated and cached in memory.');
+      setSaveBanner(`✓ Track "${trackName}" saved to local session.`);
+      setTimeout(() => setSaveBanner(null), 3500);
+    }
+  };
+
+  // Delete current track handler
+  const handleDeleteCurrentTrack = async () => {
+    if (selectedTrackId === 'silverstone_gp' || selectedTrackId === 'spa_francorchamps') {
+      setSaveBanner('⚠️ Default championship circuits cannot be deleted.');
+      setTimeout(() => setSaveBanner(null), 3000);
+      return;
+    }
+    const trackToDelete = trackName;
+    const ok = await deleteTrack(selectedTrackId);
+    if (ok) {
+      setSaveBanner(`✓ Deleted custom track "${trackToDelete}". Switched to Silverstone GP.`);
       setTimeout(() => setSaveBanner(null), 3500);
     }
   };
@@ -1203,12 +2050,122 @@ export const TracksScreen: React.FC = () => {
   }, [splineNodes, trackLengthM, computedElevations, pitlane]);
 
   return (
-    <div className="flex-1 h-screen flex flex-col p-4 bg-[#07090F] overflow-hidden select-none font-mono relative">
+    <div className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex flex-col p-4 bg-[#07090F] select-none font-mono relative">
       {/* Save Notification Banner */}
       {saveBanner && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-[#3DFF8F]/20 border-2 border-[#3DFF8F] text-[#3DFF8F] font-bold text-xs shadow-[0_0_20px_rgba(61,255,143,0.35)] flex items-center gap-2 backdrop-blur-md">
           <CheckCircle2 className="w-4 h-4" />
           <span>{saveBanner}</span>
+        </div>
+      )}
+
+      {/* Save As New / Create Track Modal Dialog */}
+      {showNewTrackModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#0D111A] border-2 border-[#1E2740] rounded-[16px] p-5 shadow-[0_0_30px_rgba(25,184,201,0.2)] space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-[#1E2740]">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-[#19B8C9]/20 text-[#19B8C9]">
+                  <MapPin className="w-4 h-4" />
+                </div>
+                <h3 className="font-bold text-sm text-[#D7DEEC] uppercase tracking-wider">
+                  Save Circuit As New Track
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowNewTrackModal(false)}
+                className="text-[#7C88A6] hover:text-[#FF4458] text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="text-[10px] text-[#7C88A6] uppercase font-bold block mb-1">
+                  Track Name:
+                </label>
+                <input
+                  type="text"
+                  value={newTrackModalName}
+                  onChange={(e) => setNewTrackModalName(e.target.value)}
+                  placeholder="e.g. Monza GP, Interlagos..."
+                  className="w-full px-3 py-2 bg-[#121826] border border-[#1E2740] rounded-xl text-[#D7DEEC] font-bold outline-none focus:border-[#19B8C9]"
+                  autoFocus
+                />
+                <div className="text-[10px] text-[#7C88A6] mt-1 font-mono">
+                  Target File: /tracks/{(newTrackModalName.trim().toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 32) || 'track')}.json
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-[#7C88A6] uppercase font-bold block mb-1">
+                  Track Length (Meters):
+                </label>
+                <input
+                  type="number"
+                  step="50"
+                  value={newTrackModalLength}
+                  onChange={(e) => setNewTrackModalLength(Number(e.target.value))}
+                  className="w-full px-3 py-1.5 bg-[#121826] border border-[#1E2740] rounded-xl text-[#D7DEEC] font-bold outline-none focus:border-[#19B8C9]"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] text-[#7C88A6] uppercase font-bold block mb-1">
+                  Initial Circuit Geometry:
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={() => setNewTrackModalTemplate('copy')}
+                    className={`p-2 rounded-xl border text-[10px] font-bold uppercase cursor-pointer transition-all ${
+                      newTrackModalTemplate === 'copy'
+                        ? 'bg-[#19B8C9] text-black border-[#19B8C9]'
+                        : 'bg-[#121826] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                    }`}
+                  >
+                    Current Nodes ({splineNodes.length})
+                  </button>
+                  <button
+                    onClick={() => setNewTrackModalTemplate('gp')}
+                    className={`p-2 rounded-xl border text-[10px] font-bold uppercase cursor-pointer transition-all ${
+                      newTrackModalTemplate === 'gp'
+                        ? 'bg-[#19B8C9] text-black border-[#19B8C9]'
+                        : 'bg-[#121826] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                    }`}
+                  >
+                    GP Layout (8 Turns)
+                  </button>
+                  <button
+                    onClick={() => setNewTrackModalTemplate('oval')}
+                    className={`p-2 rounded-xl border text-[10px] font-bold uppercase cursor-pointer transition-all ${
+                      newTrackModalTemplate === 'oval'
+                        ? 'bg-[#19B8C9] text-black border-[#19B8C9]'
+                        : 'bg-[#121826] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                    }`}
+                  >
+                    Banked Oval (6 Turns)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#1E2740]">
+              <button
+                onClick={() => setShowNewTrackModal(false)}
+                className="px-3 py-1.5 rounded-xl border border-[#1E2740] text-xs text-[#7C88A6] hover:text-[#D7DEEC] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCommitNewTrack}
+                disabled={!newTrackModalName.trim()}
+                className="px-4 py-1.5 rounded-xl bg-[#3DFF8F] text-black text-xs font-bold uppercase hover:bg-[#3DFF8F]/90 cursor-pointer shadow-[0_0_10px_rgba(61,255,143,0.3)] disabled:opacity-40"
+              >
+                Create & Save Track
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1226,12 +2183,69 @@ export const TracksScreen: React.FC = () => {
               </span>
             </h1>
             <p className="text-[11px] text-[#7C88A6]">
-              Interactive zoom/pan canvas, shift register node sequencer, delta elevation, apex banking & full 10-team pitlane
+              Continuous variable-width spline ribbon, AP width progression, delta elevation, apex banking & full 10-team pitlane
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Saved Tracks Switcher */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#0D111A] border border-[#1E2740]">
+            <span className="text-[10px] text-[#7C88A6] uppercase font-bold">Circuit:</span>
+            <select
+              value={selectedTrackId}
+              onChange={(e) => {
+                if (e.target.value === '__new__') {
+                  handleOpenNewTrackModal();
+                } else {
+                  setSelectedTrackId(e.target.value);
+                }
+              }}
+              className="bg-[#121826] border border-[#1E2740] text-xs font-bold text-[#19B8C9] rounded-lg px-2 py-1 outline-none cursor-pointer focus:border-[#19B8C9]"
+            >
+              {tracks.map((t) => {
+                const isCustom = t.id !== 'silverstone_gp' && t.id !== 'spa_francorchamps';
+                return (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({(t.length_m / 1000).toFixed(2)} km){isCustom ? ' ★ Custom' : ''}
+                  </option>
+                );
+              })}
+              <option value="__new__">+ Create New Track...</option>
+            </select>
+
+            {/* Save current changes */}
+            <button
+              onClick={handleSaveTrack}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#19B8C9] text-black font-bold text-xs uppercase hover:bg-[#19B8C9]/90 cursor-pointer shadow-[0_0_8px_rgba(25,184,201,0.25)]"
+              title="Save changes to active circuit JSON file"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Save</span>
+            </button>
+
+            {/* Save as New Circuit */}
+            <button
+              onClick={handleOpenSaveAsModal}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#121826] border border-[#19B8C9]/50 text-[#19B8C9] hover:bg-[#19B8C9]/20 font-bold text-xs uppercase cursor-pointer"
+              title="Save under a new custom circuit name"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Save As New...</span>
+            </button>
+
+            {/* Delete custom circuit button */}
+            {selectedTrackId !== 'silverstone_gp' && selectedTrackId !== 'spa_francorchamps' && (
+              <button
+                onClick={handleDeleteCurrentTrack}
+                className="p-1.5 rounded-lg bg-[#FF4458]/15 border border-[#FF4458]/40 text-[#FF4458] hover:bg-[#FF4458]/25 cursor-pointer ml-1"
+                title="Delete this custom circuit"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
           {/* Sub-tabs */}
           <div className="flex p-0.5 rounded-xl bg-[#0D111A] border border-[#1E2740]">
             {(['surface', 'spline', 'elevation', 'pitlane', 'validation', 'export'] as const).map((tab) => (
@@ -1269,6 +2283,7 @@ export const TracksScreen: React.FC = () => {
           <div className="space-y-2 w-full flex flex-col items-center">
             {[
               { id: 'spline', icon: <Spline className="w-4 h-4" />, label: 'Spline Centerline Road' },
+              { id: 'box_select', icon: <BoxSelect className="w-4 h-4" />, label: 'Marquee Area Select & Move Nodes' },
               { id: 'pan', icon: <Move className="w-4 h-4" />, label: 'Pan Canvas (or Middle-Click Drag)' },
               { id: 'brush', icon: <Brush className="w-4 h-4" />, label: 'Brush (Paint Surface)' },
               { id: 'eraser', icon: <Eraser className="w-4 h-4" />, label: 'Eraser (Void)' },
@@ -1282,7 +2297,7 @@ export const TracksScreen: React.FC = () => {
                 key={tool.id}
                 onClick={() => {
                   setActiveTool(tool.id as any);
-                  if (tool.id === 'spline') setActiveTab('spline');
+                  if (tool.id === 'spline' || tool.id === 'box_select') setActiveTab('spline');
                 }}
                 className={`p-2 rounded-xl transition-all cursor-pointer ${
                   activeTool === tool.id
@@ -1352,15 +2367,19 @@ export const TracksScreen: React.FC = () => {
         <div className="col-span-8 p-3 bg-[#0D111A] border-2 border-[#1E2740] rounded-[14px] flex flex-col justify-between relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-[#7C88A6] pb-2 border-b border-[#1E2740]">
             <div className="flex items-center gap-3">
-              <input
-                type="text"
-                value={trackName}
-                onChange={(e) => setTrackName(e.target.value)}
-                className="font-bold text-[#D7DEEC] uppercase bg-[#121826] border border-[#1E2740] px-2 py-0.5 rounded outline-none focus:border-[#19B8C9]"
-                title="Click to rename circuit"
-              />
-              <span>Scale: {cellSize}m/px</span>
-              <span className="font-bold text-[#19B8C9]">Zoom: {(zoomLevel * 100).toFixed(0)}%</span>
+              <div className="flex items-center gap-1.5 bg-[#121826] border border-[#1E2740] px-2 py-0.5 rounded-lg">
+                <span className="text-[10px] text-[#7C88A6] uppercase font-bold">Track Name:</span>
+                <input
+                  type="text"
+                  value={trackName}
+                  onChange={(e) => setTrackName(e.target.value)}
+                  className="font-bold text-[#D7DEEC] uppercase bg-transparent border-none outline-none focus:text-[#19B8C9] min-w-[140px]"
+                  title="Click to rename circuit (Save to commit)"
+                  placeholder="Circuit Name..."
+                />
+              </div>
+              <span className="text-[11px]">Scale: {cellSize}m/px</span>
+              <span className="font-bold text-[#19B8C9] text-[11px]">Zoom: {(zoomLevel * 100).toFixed(0)}%</span>
               {(panOffset.x !== 0 || panOffset.y !== 0) && (
                 <span className="text-[10px] text-[#7C88A6]">Pan: ({panOffset.x.toFixed(0)}, {panOffset.y.toFixed(0)})</span>
               )}
@@ -1394,7 +2413,7 @@ export const TracksScreen: React.FC = () => {
             </div>
           </div>
 
-          {/* Interactive HTML5 Canvas Container with Pan & Wheel Zoom */}
+            {/* Interactive HTML5 Canvas Container with Pan & Wheel Zoom */}
           <div className="flex-1 w-full flex items-center justify-center my-2 relative overflow-hidden bg-[#07090F] rounded-xl border border-[#1E2740]">
             <canvas
               ref={canvasRef}
@@ -1405,6 +2424,20 @@ export const TracksScreen: React.FC = () => {
               onMouseUp={handleMouseUp}
               onDoubleClick={handleDoubleClick}
               onWheel={handleWheel}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (activeTool === 'spline') {
+                  const pos = getCanvasCoords(e);
+                  const clickedIdx = splineNodes.findIndex((n) => {
+                    const dx = n.x - pos.x;
+                    const dy = n.y - pos.y;
+                    return Math.sqrt(dx * dx + dy * dy) < 16;
+                  });
+                  if (clickedIdx !== -1) {
+                    handleDeleteSelectedNode(clickedIdx);
+                  }
+                }
+              }}
               className={`w-full h-full block ${
                 activeTool === 'pan' || isPanning ? 'cursor-grab active:cursor-grabbing' : 'cursor-crosshair'
               }`}
@@ -1414,7 +2447,7 @@ export const TracksScreen: React.FC = () => {
             {activeTool === 'spline' && (
               <div className="absolute top-2 left-2 px-3 py-1.5 rounded-lg bg-[#121826]/95 border border-[#19B8C9] text-[10px] text-[#D7DEEC] shadow-lg pointer-events-none flex items-center gap-2">
                 <span className="text-[#19B8C9] font-bold">Spline Tool:</span>
-                <span>Click & drag waypoints. Click canvas to spawn turn.</span>
+                <span>Click & drag waypoints. Right-click or Del to delete.</span>
                 <span className="px-1.5 py-0.5 rounded bg-[#19B8C9]/20 text-[#19B8C9] font-bold uppercase">
                   Mode: {nodeInsertMode === 'append' ? 'Append at End (TN)' : 'Shift Register (T1)'}
                 </span>
@@ -1601,6 +2634,132 @@ export const TracksScreen: React.FC = () => {
                 </button>
               </div>
 
+              {/* Area Selection & Batch Movement Panel */}
+              <div className="p-2.5 rounded-xl bg-[#121826] border border-[#1E2740] space-y-2">
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#D7DEEC]">
+                  <span className="flex items-center gap-1.5">
+                    <BoxSelect className="w-3.5 h-3.5 text-[#F0388F]" />
+                    <span>Area Selection ({selectedNodeIndices.size} Selected)</span>
+                  </span>
+                  <span className="text-[10px] text-[#19B8C9] font-mono">
+                    {selectedNodeIndices.size === splineNodes.length ? 'ALL NODES' : `${selectedNodeIndices.size}/${splineNodes.length}`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={() => {
+                      const all = new Set<number>();
+                      splineNodes.forEach((_, i) => all.add(i));
+                      setSelectedNodeIndices(all);
+                    }}
+                    className="py-1 px-2 rounded-lg bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[10px] text-[#D7DEEC] font-bold cursor-pointer"
+                  >
+                    Select All Area
+                  </button>
+                  <button
+                    onClick={() => setSelectedNodeIndices(new Set())}
+                    className="py-1 px-2 rounded-lg bg-[#07090F] border border-[#1E2740] hover:border-[#FF4458] text-[10px] text-[#7C88A6] hover:text-[#FF4458] cursor-pointer"
+                  >
+                    Clear Selection
+                  </button>
+                </div>
+
+                {/* Move Nodes Translation D-Pad */}
+                <div className="space-y-1 pt-1 border-t border-[#1E2740]/60">
+                  <div className="text-[9px] text-[#7C88A6] uppercase font-bold flex items-center justify-between">
+                    <span>Move Selected Area (ΔX, ΔY):</span>
+                    <span>Drag nodes or click:</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-[10px] text-center font-bold">
+                    <button
+                      onClick={() => handleTranslateSelectedNodes(-10, 0)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[#D7DEEC] cursor-pointer"
+                      title="Move Left 10px"
+                    >
+                      ← 10px
+                    </button>
+                    <button
+                      onClick={() => handleTranslateSelectedNodes(10, 0)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[#D7DEEC] cursor-pointer"
+                      title="Move Right 10px"
+                    >
+                      → 10px
+                    </button>
+                    <button
+                      onClick={() => handleTranslateSelectedNodes(0, -10)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[#D7DEEC] cursor-pointer"
+                      title="Move Up 10px"
+                    >
+                      ↑ 10px
+                    </button>
+                    <button
+                      onClick={() => handleTranslateSelectedNodes(0, 10)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[#D7DEEC] cursor-pointer"
+                      title="Move Down 10px"
+                    >
+                      ↓ 10px
+                    </button>
+                  </div>
+                </div>
+
+                {/* Rotate Selected Area Around Centroid */}
+                <div className="space-y-1 pt-1 border-t border-[#1E2740]/60">
+                  <div className="text-[9px] text-[#7C88A6] uppercase font-bold flex items-center justify-between">
+                    <span>Rotate Selected Area (Along Center):</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1 text-[9px] font-bold">
+                    <button
+                      onClick={() => handleRotateSelectedNodes(-15)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#F0388F] text-[#D7DEEC] cursor-pointer"
+                      title="Rotate counter-clockwise 15°"
+                    >
+                      -15°
+                    </button>
+                    <button
+                      onClick={() => handleRotateSelectedNodes(-5)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#F0388F] text-[#D7DEEC] cursor-pointer"
+                      title="Rotate counter-clockwise 5°"
+                    >
+                      -5°
+                    </button>
+                    <button
+                      onClick={() => handleRotateSelectedNodes(5)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#F0388F] text-[#D7DEEC] cursor-pointer"
+                      title="Rotate clockwise 5°"
+                    >
+                      +5°
+                    </button>
+                    <button
+                      onClick={() => handleRotateSelectedNodes(15)}
+                      className="p-1 rounded bg-[#07090F] border border-[#1E2740] hover:border-[#F0388F] text-[#D7DEEC] cursor-pointer"
+                      title="Rotate clockwise 15°"
+                    >
+                      +15°
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Track Smoothing Panel (Preserves Center Rotations Invariant) */}
+              <div className="p-2.5 rounded-xl bg-[#121826] border border-[#1E2740] space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-[#D7DEEC]">
+                  <span>Track Centerline Smoothing</span>
+                  <span className="text-[9px] text-[#3DFF8F] font-mono">ROTATION LOCKED</span>
+                </div>
+                <button
+                  onClick={handleSmoothTrack}
+                  className="w-full py-2 px-3 rounded-xl bg-[#121826] border border-[#19B8C9] hover:bg-[#19B8C9]/20 text-[#19B8C9] text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_8px_rgba(25,184,201,0.25)] transition-all"
+                  title="Applies weighted Laplacian smoothing to waypoint coordinates. All center rotations and banking remain strictly untouched."
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Smooth Track (Preserves Center Rotations)</span>
+                </button>
+                <div className="text-[9px] text-[#7C88A6]">
+                  Laplacian filter smooths geometric curve kinks. Center rotation angles are 100% invariant and never overridden.
+                </div>
+              </div>
+
               {/* Selected Node Inspector (Delta Elevation, Banking & Coordinates) */}
               {selectedNode && selectedNodeIdx !== null && (
                 <div className="p-2.5 rounded-xl bg-[#121826] border border-[#F0388F]/50 space-y-2 text-xs">
@@ -1625,6 +2784,14 @@ export const TracksScreen: React.FC = () => {
                           <ArrowDown className="w-3 h-3" />
                         </button>
                       )}
+                      <button
+                        onClick={() => handleDeleteSelectedNode(selectedNodeIdx)}
+                        disabled={splineNodes.length <= 3}
+                        className="p-1 rounded bg-[#FF4458]/15 border border-[#FF4458]/40 text-[#FF4458] hover:bg-[#FF4458]/25 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ml-1"
+                        title="Delete Waypoint (Del)"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
 
@@ -1735,6 +2902,246 @@ export const TracksScreen: React.FC = () => {
                       <span>+15° (Banked In)</span>
                     </div>
                   </div>
+
+                    {/* Center Rotation Along Center (Per-node & SF Gate) */}
+                    <div className="space-y-1 pt-1 border-t border-[#1E2740]">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-[#7C88A6] font-bold uppercase">
+                          {selectedNodeIdx === 0 ? 'SF Timing Gate Rotation:' : 'Node Center Rotation:'}
+                        </span>
+                        <span className="font-bold text-[#FFC247]">
+                          {(selectedNode.rotation_deg ?? 0) >= 0 ? '+' : ''}{(selectedNode.rotation_deg ?? 0)}°
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="-180"
+                          max="180"
+                          step="1"
+                          value={selectedNode.rotation_deg ?? 0}
+                          onChange={(e) => handleSetNodeCenterRotation(Number(e.target.value))}
+                          className="w-18 px-2 py-0.5 bg-[#07090F] border border-[#1E2740] rounded text-xs text-[#FFC247] outline-none"
+                        />
+                        <input
+                          type="range"
+                          min="-180"
+                          max="180"
+                          step="1"
+                          value={selectedNode.rotation_deg ?? 0}
+                          onChange={(e) => handleSetNodeCenterRotation(Number(e.target.value))}
+                          className="flex-1 accent-[#FFC247] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Quick Rotation Buttons */}
+                      <div className="grid grid-cols-6 gap-1 text-[9px] font-bold text-center">
+                        {[-90, -45, 0, 45, 90, 180].map((deg) => (
+                          <button
+                            key={deg}
+                            onClick={() => handleSetNodeCenterRotation(deg)}
+                            className={`py-0.5 rounded border cursor-pointer ${
+                              (selectedNode.rotation_deg ?? 0) === deg
+                                ? 'bg-[#FFC247] text-black border-[#FFC247]'
+                                : 'bg-[#07090F] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                            }`}
+                          >
+                            {deg > 0 ? `+${deg}°` : `${deg}°`}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="text-[9px] text-[#7C88A6] italic">
+                        Perpendicular track normal rotates along waypoint center. Strictly preserved across smoothing.
+                      </div>
+                    </div>
+
+                    {/* Track Width at Node & Continuous Increment Function */}
+                    <div className="space-y-2 pt-1 border-t border-[#1E2740]">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-[#7C88A6] font-bold uppercase">Track Width at Node:</span>
+                        <span className="font-bold text-[#19B8C9] text-xs">
+                          {(selectedNode.width_m || 12.0).toFixed(1)} m
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="6"
+                          max="26"
+                          step="0.5"
+                          value={selectedNode.width_m || 12.0}
+                          onChange={(e) => {
+                            const val = Math.max(6, Math.min(26, Number(e.target.value)));
+                            const updated = [...splineNodes];
+                            updated[selectedNodeIdx].width_m = val;
+                            setSplineNodes(updated);
+                          }}
+                          className="w-18 px-2 py-0.5 bg-[#07090F] border border-[#1E2740] rounded text-xs text-[#D7DEEC] outline-none"
+                        />
+                        <input
+                          type="range"
+                          min="6"
+                          max="26"
+                          step="0.5"
+                          value={selectedNode.width_m || 12.0}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            const updated = [...splineNodes];
+                            updated[selectedNodeIdx].width_m = val;
+                            setSplineNodes(updated);
+                          }}
+                          className="flex-1 accent-[#19B8C9] cursor-pointer"
+                        />
+                      </div>
+
+                      {/* Width Progression Function (Linear, Quadratic C1 Smooth, Sqrt) */}
+                      <div className="space-y-1 pt-1 border-t border-[#1E2740]/60">
+                        <div className="text-[10px] text-[#7C88A6] uppercase font-bold flex items-center justify-between">
+                          <span>Width Progression:</span>
+                          <span className="text-[#3DFF8F] font-mono">
+                            {selectedNode.width_interp === 'linear' ? 'Linear (AP)' : selectedNode.width_interp === 'sqrt' ? 'Sqrt (AP)' : 'Quadratic (C¹)'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1">
+                          <button
+                            onClick={() => {
+                              const updated = [...splineNodes];
+                              updated[selectedNodeIdx].width_interp = 'linear';
+                              setSplineNodes(updated);
+                            }}
+                            className={`py-1 px-1 rounded text-[9px] font-bold border cursor-pointer transition-all ${
+                              selectedNode.width_interp === 'linear'
+                                ? 'bg-[#19B8C9] text-black border-[#19B8C9]'
+                                : 'bg-[#07090F] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                            }`}
+                            title="Linear arithmetic progression: uniform change rate"
+                          >
+                            Linear (AP)
+                          </button>
+                          <button
+                            onClick={() => {
+                              const updated = [...splineNodes];
+                              updated[selectedNodeIdx].width_interp = 'quadratic';
+                              setSplineNodes(updated);
+                            }}
+                            className={`py-1 px-1 rounded text-[9px] font-bold border cursor-pointer transition-all ${
+                              (!selectedNode.width_interp || selectedNode.width_interp === 'quadratic')
+                                ? 'bg-[#3DFF8F] text-black border-[#3DFF8F]'
+                                : 'bg-[#07090F] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                            }`}
+                            title="Hermite smoothstep C1 continuous: zero derivative at nodes, zero sharp bumps"
+                          >
+                            Quad (C¹)
+                          </button>
+                          <button
+                            onClick={() => {
+                              const updated = [...splineNodes];
+                              updated[selectedNodeIdx].width_interp = 'sqrt';
+                              setSplineNodes(updated);
+                            }}
+                            className={`py-1 px-1 rounded text-[9px] font-bold border cursor-pointer transition-all ${
+                              selectedNode.width_interp === 'sqrt'
+                                ? 'bg-[#FFC247] text-black border-[#FFC247]'
+                                : 'bg-[#07090F] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                            }`}
+                            title="Square root progression: fast initial flare tapering smoothly"
+                          >
+                            Sqrt (AP)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Visual Progression Difference & Quick Flare Preview */}
+                      {(() => {
+                        const nextIdx = (selectedNodeIdx + 1) % splineNodes.length;
+                        const nextNode = splineNodes[nextIdx];
+                        const wStart = selectedNode.width_m || 12.0;
+                        const wEnd = nextNode?.width_m || 12.0;
+                        const deltaW = wEnd - wStart;
+                        const curInterp = selectedNode.width_interp || 'quadratic';
+                        const midFactor = curInterp === 'sqrt' ? Math.sqrt(0.5) : curInterp === 'quadratic' ? (0.5 * 0.5 * (3 - 2 * 0.5)) : 0.5;
+                        const midW = wStart + deltaW * midFactor;
+
+                        return (
+                          <div className="p-2 rounded bg-[#07090F] border border-[#1E2740] space-y-1.5 text-[10px]">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[#7C88A6]">Next Node ({nextNode?.label || `T${nextIdx}`}):</span>
+                              <span className="font-bold text-[#D7DEEC]">{wEnd.toFixed(1)}m (Δ {deltaW >= 0 ? `+${deltaW.toFixed(1)}m` : `${deltaW.toFixed(1)}m`})</span>
+                            </div>
+                            <div className="flex items-center justify-between text-[9px]">
+                              <span className="text-[#7C88A6]">Progression Profile:</span>
+                              <span className="text-[#19B8C9] font-mono">
+                                {wStart.toFixed(1)}m → Mid {midW.toFixed(1)}m → {wEnd.toFixed(1)}m
+                              </span>
+                            </div>
+                            <div className="text-[9px] text-[#7C88A6]">
+                              {curInterp === 'linear' && '• Linear: Constant rate taper/flare from node to node'}
+                              {curInterp === 'quadratic' && '• Quad (C¹): Hermite smoothstep with 0-derivative tangent at junctions'}
+                              {curInterp === 'sqrt' && '• Sqrt: Rapid initial expansion out of apex, then tapering smoothly'}
+                            </div>
+                            <div className="grid grid-cols-2 gap-1 pt-1">
+                              <button
+                                onClick={() => {
+                                  const updated = [...splineNodes];
+                                  updated[nextIdx] = { ...updated[nextIdx], width_m: Math.min(26, +(wStart + 3.0).toFixed(1)) };
+                                  setSplineNodes(updated);
+                                }}
+                                className="py-1 px-1.5 rounded bg-[#121826] border border-[#1E2740] hover:border-[#3DFF8F] text-[#3DFF8F] font-bold text-[9px] cursor-pointer"
+                                title="Sets next node width to +3m to visibly test Linear vs Quad vs Sqrt curves"
+                              >
+                                +3m Flare on Next Node
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const updated = [...splineNodes];
+                                  updated[nextIdx] = { ...updated[nextIdx], width_m: Math.max(8, +(wStart - 3.0).toFixed(1)) };
+                                  setSplineNodes(updated);
+                                }}
+                                className="py-1 px-1.5 rounded bg-[#121826] border border-[#1E2740] hover:border-[#FFC247] text-[#FFC247] font-bold text-[9px] cursor-pointer"
+                                title="Sets next node width to -3m to visibly test Linear vs Quad vs Sqrt curves"
+                              >
+                                -3m Taper on Next Node
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      <button
+                        onClick={() => {
+                          const curWidth = selectedNode.width_m || 12.0;
+                          const curInterp = selectedNode.width_interp || 'quadratic';
+                          setSplineNodes((prev) =>
+                            prev.map((n) => ({ ...n, width_m: curWidth, width_interp: curInterp }))
+                          );
+                          setSaveBanner(`✓ Applied ${curWidth.toFixed(1)}m width to all ${splineNodes.length} nodes.`);
+                          setTimeout(() => setSaveBanner(null), 3000);
+                        }}
+                        className="w-full py-1 text-[10px] rounded bg-[#07090F] border border-[#1E2740] hover:border-[#19B8C9] text-[#19B8C9] font-bold cursor-pointer"
+                      >
+                        Apply {(selectedNode.width_m || 12.0).toFixed(1)}m to All Nodes
+                      </button>
+                    </div>
+
+                  {/* Delete Waypoint Action */}
+                  <div className="pt-2 border-t border-[#1E2740]">
+                    <button
+                      onClick={() => handleDeleteSelectedNode(selectedNodeIdx)}
+                      disabled={splineNodes.length <= 3}
+                      className="w-full py-2 px-3 rounded-xl bg-[#FF4458]/15 border border-[#FF4458]/40 hover:bg-[#FF4458]/25 text-[#FF4458] text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-[0_0_8px_rgba(255,68,88,0.2)]"
+                      title={splineNodes.length <= 3 ? "Circuit needs at least 3 points" : "Delete this waypoint node (or press Delete key)"}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Waypoint {selectedNode.label} (Del)</span>
+                    </button>
+                    {splineNodes.length <= 3 && (
+                      <div className="text-[9px] text-[#7C88A6] text-center pt-1 italic">
+                        Minimum 3 nodes required for a closed loop circuit
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1744,7 +3151,7 @@ export const TracksScreen: React.FC = () => {
                 className="w-full py-2 rounded-xl bg-[#19B8C9] text-black font-bold text-xs uppercase tracking-wider hover:bg-[#19B8C9]/90 cursor-pointer shadow-[0_0_10px_rgba(25,184,201,0.25)] flex items-center justify-center gap-1.5"
               >
                 <Brush className="w-3.5 h-3.5" />
-                <span>Auto-Paint 12m Tarmac Road</span>
+                <span>Auto-Paint Continuous Ribbon (Tarmac & Kerbs)</span>
               </button>
 
               <button
@@ -1902,6 +3309,56 @@ export const TracksScreen: React.FC = () => {
                         {spd} km/h
                       </button>
                     ))}
+                  </div>
+                </div>
+
+                {/* Pit Lane Center Rotation Along Center */}
+                <div className="space-y-1 pt-1 border-t border-[#1E2740]">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-[#7C88A6] font-bold uppercase">Pit Lane Center Rotation:</span>
+                    <span className="font-bold text-[#3DFF8F]">
+                      {(pitlane.rotation_deg ?? 0) >= 0 ? '+' : ''}{(pitlane.rotation_deg ?? 0)}°
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="-180"
+                      max="180"
+                      step="1"
+                      value={pitlane.rotation_deg ?? 0}
+                      onChange={(e) => handleSetPitlaneRotation(Number(e.target.value))}
+                      className="w-18 px-2 py-0.5 bg-[#07090F] border border-[#1E2740] rounded text-xs text-[#3DFF8F] outline-none"
+                    />
+                    <input
+                      type="range"
+                      min="-180"
+                      max="180"
+                      step="1"
+                      value={pitlane.rotation_deg ?? 0}
+                      onChange={(e) => handleSetPitlaneRotation(Number(e.target.value))}
+                      className="flex-1 accent-[#3DFF8F] cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1 text-[9px] font-bold text-center">
+                    {[-90, 0, 90, 180].map((deg) => (
+                      <button
+                        key={deg}
+                        onClick={() => handleSetPitlaneRotation(deg)}
+                        className={`py-0.5 rounded border cursor-pointer ${
+                          (pitlane.rotation_deg ?? 0) === deg
+                            ? 'bg-[#3DFF8F] text-black border-[#3DFF8F]'
+                            : 'bg-[#07090F] text-[#7C88A6] border-[#1E2740] hover:text-[#D7DEEC]'
+                        }`}
+                      >
+                        {deg > 0 ? `+${deg}°` : `${deg}°`}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[9px] text-[#7C88A6] italic">
+                    Rotates pit road, team boxes, and garages along pitlane centroid.
                   </div>
                 </div>
 

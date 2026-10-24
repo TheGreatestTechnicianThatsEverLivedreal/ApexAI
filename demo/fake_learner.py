@@ -180,7 +180,8 @@ def main():
                     "time": round(lap_time / 25.0 + random.uniform(-0.05, 0.05), 3)
                 })
 
-            tyre_health = max(15.0, 100.0 - (lap_counter * 3.8) % 85.0)
+            # Tyre health degrades monotonically along a clean downward slope without bouncing or oscillating
+            tyre_health = round(max(8.0, 100.0 - max(0, lap_counter - 1) * 1.85), 1)
             battery_s3 = round(random.uniform(78.0, 99.5), 1)
 
             crash_obj = None

@@ -74,7 +74,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Main Screen Content View */}
-      <main className="flex-1 h-screen overflow-hidden flex flex-col">
+      <main className="flex-1 h-screen overflow-y-auto overflow-x-hidden flex flex-col">
         {renderScreen()}
       </main>
 
